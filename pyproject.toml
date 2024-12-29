@@ -29,4 +29,7 @@ dependencies = [
 
 [project.urls]
 "Homepage" = "https://github.com/brownkat6/evolutionary-cot-vlm"
-"Bug Tracker" = "https://github.com/brownkat6/evolutionary-cot-vlm/issues" 
+"Bug Tracker" = "https://github.com/brownkat6/evolutionary-cot-vlm/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["evolutionary_cot_vlm"] 
