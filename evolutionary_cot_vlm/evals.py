@@ -1,8 +1,8 @@
-from typing import Any, Dict, List, Tuple, Union, Optional
+from typing import List, Dict, Any, Optional, Tuple, Union
 import json
 import torch
 from tqdm import tqdm
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, concatenate_datasets
 from PIL import Image
 import requests
 from io import BytesIO
@@ -18,6 +18,7 @@ from parlai.core.opt import Opt
 from parlai.core.teachers import create_task_agent_from_taskname
 from parlai.tasks.vqa_v2.agents import OeTeacher
 from constants import CHARTQA_DIR, VQA_V2_DIR, MMMU_DIR
+import zipfile
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -48,27 +49,35 @@ def download_chartqa(output_dir: Path = CHARTQA_DIR) -> None:
     url = "https://huggingface.co/datasets/ahmed-masry/ChartQA/resolve/main/ChartQA%20Dataset.zip"
     zip_path = output_dir / "chartqa.zip"
     
-    print("1. Downloading zip file...")
-    response = requests.get(url, stream=True)
-    response.raise_for_status()
-    
-    total_size = int(response.headers.get('content-length', 0))
-    with open(zip_path, 'wb') as f, tqdm(
-        total=total_size,
-        unit='iB',
-        unit_scale=True,
-        desc="Downloading"
-    ) as pbar:
-        for data in response.iter_content(8192):
-            size = f.write(data)
-            pbar.update(size)
-    
-    print("2. Extracting files...")
-    shutil.unpack_archive(zip_path, output_dir)
-    
-    print("3. Cleaning up...")
-    zip_path.unlink()
-    print(f"✓ ChartQA dataset successfully downloaded to {output_dir}")
+    try:
+        print("1. Downloading zip file...")
+        response = requests.get(url, stream=True)
+        response.raise_for_status()
+        
+        total_size = int(response.headers.get('content-length', 0))
+        with open(zip_path, 'wb') as f, tqdm(
+            total=total_size,
+            unit='iB',
+            unit_scale=True,
+            desc="Downloading"
+        ) as pbar:
+            for data in response.iter_content(8192):
+                size = f.write(data)
+                pbar.update(size)
+        
+        print(f"2. Extracting files... from {zip_path} to {output_dir}")
+        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+            zip_ref.extractall(output_dir)
+        
+        print("3. Cleaning up...")
+        zip_path.unlink()
+        print(f"✓ ChartQA dataset successfully downloaded to {output_dir}")
+        
+    except Exception as e:
+        print(f"! Error during download: {str(e)}")
+        if zip_path.exists():
+            zip_path.unlink()
+        raise
 
 def setup_vqa_v2(output_dir: Path) -> None:
     """Setup VQA-v2 dataset using ParlAI."""
@@ -98,32 +107,77 @@ def setup_vqa_v2(output_dir: Path) -> None:
         print("! Warning: Some expected directories are missing")
 
 def setup_mmmu(output_dir: Path) -> None:
-    """Setup MMMU dataset using HuggingFace."""
+    """Setup MMMU dataset by combining all subjects."""
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n=== Setting up MMMU Dataset in {output_dir} ===")
     
-    print("1. Downloading from HuggingFace...")
-    dataset = load_dataset("MMMU/MMMU", 'Computer_Science', cache_dir=str(output_dir))
+    # List of all MMMU subjects
+    subjects = [
+        'Art_and_Design', 'Business', 'Computer_Science', 'Engineering',
+        'Humanities', 'Mathematics', 'Medicine', 'Natural_Sciences',
+        'Social_Sciences'
+    ]
     
-    print("2. Verifying splits...")
+    print("1. Downloading all MMMU subjects...")
+    combined_datasets = {}
+    
     for split in ['dev', 'validation', 'test']:
-        if split in dataset:
-            print(f"  ✓ Found {split} split with {len(dataset[split])} examples")
-    print(f"✓ MMMU dataset successfully set up in {output_dir}")
+        print(f"\nLoading {split} split:")
+        split_datasets = []
+        
+        for subject in subjects:
+            print(f"  - Downloading {subject}...")
+            try:
+                dataset = load_dataset(
+                    "MMMU/MMMU",
+                    subject,
+                    split=split,
+                    cache_dir=str(output_dir)
+                )
+                split_datasets.append(dataset)
+                print(f"    ✓ Found {len(dataset)} examples")
+            except Exception as e:
+                print(f"    ! Error loading {subject}: {str(e)}")
+                continue
+        
+        # Combine all subjects for this split
+        if split_datasets:
+            combined_datasets[split] = concatenate_datasets(split_datasets)
+            print(f"  ✓ Combined {split} split: {len(combined_datasets[split])} total examples")
+    
+    print("\n2. Verifying combined datasets:")
+    for split, dataset in combined_datasets.items():
+        print(f"  - {split}: {len(dataset)} examples")
+    
+    n_examples = sum(len(dataset) for dataset in combined_datasets.values())
+    print(f"\n✓ MMMU dataset successfully set up in {output_dir} with {n_examples} examples")
+    return combined_datasets
 
 def ensure_dataset(benchmark: str, data_dir: Optional[str] = None) -> Path:
     """Ensure dataset is downloaded and return its path."""
     print(f"\n=== Checking {benchmark.upper()} Dataset ===")
     
     if benchmark == 'chartqa':
-        output_dir = Path(CHARTQA_DIR)
+        output_dir = Path(data_dir or CHARTQA_DIR)
         print(f"ChartQA directory: {output_dir.absolute()}")
-        if not (output_dir / 'train' / 'train_augmented.json').exists():
+        dataset_dir = output_dir / 'ChartQA Dataset'
+        train_file = dataset_dir / 'train' / 'train_augmented.json'
+        print(f"Looking for dataset at: {train_file.absolute()}")
+        
+        if not train_file.exists():
             print("! ChartQA dataset not found. Starting download...")
             download_chartqa(output_dir)
+            print(f"Verifying download at: {dataset_dir.absolute()}")
+            if train_file.exists():
+                print(f"✓ Found train file: {train_file.absolute()}")
+            else:
+                print(f"! Warning: Expected train file not found at {train_file.absolute()}")
         else:
             print("✓ ChartQA dataset already exists")
-            
+            print(f"  - Train file: {train_file.absolute()}")
+            print(f"  - Dataset dir: {dataset_dir.absolute()}")
+        return dataset_dir
+        
     elif benchmark == 'vqav2':
         output_dir = Path(VQA_V2_DIR)
         print(f"VQA-v2 directory: {output_dir.absolute()}")
@@ -241,10 +295,26 @@ def evaluate_model(
     split: str = "validation",
     num_samples: Optional[int] = None,
     prefix: str = "",
-    data_dir: Optional[str] = None
-) -> Dict[str, float]:
+    data_dir: Optional[str] = None,
+    dataset: Optional[Dataset] = None,
+    return_dataset: bool = False
+) -> Union[Dict[str, float], Dataset]:
     """
     Evaluate model on benchmark dataset.
+    
+    Args:
+        model: The model to evaluate
+        processor: The model's processor/tokenizer
+        benchmark: Name of the benchmark
+        split: Split to evaluate
+        num_samples: Number of samples to evaluate
+        prefix: Prefix to evaluate
+        data_dir: Data directory
+        dataset: Optional pre-loaded dataset to use
+        return_dataset: If True, return the loaded dataset instead of evaluating
+        
+    Returns:
+        Either evaluation metrics or the loaded dataset
     """
     try:
         print(f"\n=== Starting Evaluation on {benchmark.upper()} ===")
@@ -257,8 +327,12 @@ def evaluate_model(
         
         print("\n2. Loading Data")
         if benchmark == 'chartqa':
-            dataset = get_chartqa_dataset(split, "local", str(dataset_dir))
+            dataset_path = str(dataset_dir / 'ChartQA Dataset')
+            print(f"Loading ChartQA dataset from: {dataset_path}")
+            dataset = get_chartqa_dataset(split, "local", dataset_path)
             print(f"✓ Loaded {len(dataset)} examples from ChartQA")
+            print(f"  - Split: {split}")
+            print(f"  - Path: {dataset_path}")
             
         elif benchmark == 'vqav2':
             # Convert split names to ParlAI format
@@ -302,12 +376,18 @@ def evaluate_model(
                 'validation': 'validation',
                 'test': 'test'
             }.get(split, split)
+            
+            # Load all subjects
             dataset = load_dataset(
                 "MMMU/MMMU",
-                'Computer_Science',
+                "*",  # Load all configurations
                 split=mmmu_split,
                 cache_dir=str(dataset_dir)
             )
+
+            # Initialize counters
+            skipped_count = 0
+            processed_count = 0
 
             print(f"✓ Loaded {len(dataset)} examples from MMMU")
 
@@ -342,8 +422,9 @@ def evaluate_model(
                         
                     elif benchmark == 'mmmu':
                         if item.get('image_path') is None:
-                            logger.warning(f"Skipping item: no image_path provided")
+                            skipped_count += 1
                             continue
+                        processed_count += 1
                             
                         image = Image.open(item['image_path'])
                         question = prefix + item['question']
@@ -414,7 +495,13 @@ def evaluate_model(
                 metrics['short_form_accuracy'] = sum(r['score'] for r in short_form_results) / len(short_form_results)
                 metrics['short_form_count'] = float(len(short_form_results))
 
-        return metrics
+        # At the end of processing
+        print(f"\nMMU Stats: {processed_count} items processed, {skipped_count} items skipped (no images)")
+
+        if return_dataset:
+            return dataset
+        else:
+            return metrics
 
     except Exception as e:
         print(f"\n! Error during evaluation: {str(e)}")

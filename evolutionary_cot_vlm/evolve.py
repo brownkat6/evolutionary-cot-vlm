@@ -1,4 +1,4 @@
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Union
 import json
 import random
 import numpy as np
@@ -13,6 +13,7 @@ from evolve_generations import (
     EvolutionParams,
     mutate_prefix
 )
+from datasets import Dataset
 
 def get_timestamp() -> str:
     """Get current timestamp for printing."""
@@ -79,7 +80,8 @@ def fitness_function(
     model: Any,
     processor: Any,
     prefix: str,
-    benchmark: str
+    benchmark: str,
+    dataset: Dataset,
 ) -> float:
     """
     Evaluate a prefix using the benchmark-specific metric on train set samples.
@@ -89,6 +91,7 @@ def fitness_function(
         processor: The model's processor/tokenizer
         prefix: Prefix to evaluate
         benchmark: Name of the benchmark
+        dataset: Pre-loaded dataset to evaluate on
         
     Returns:
         Fitness score between 0 and 1
@@ -99,7 +102,8 @@ def fitness_function(
         benchmark=benchmark,
         split='train',
         num_samples=N_TRAIN_SAMPLES,
-        prefix=prefix
+        prefix=prefix,
+        dataset=dataset
     )
     
     if benchmark == 'mmmu':
@@ -149,6 +153,20 @@ def main() -> None:
         model, processor = load_model(args.model)
         print("✅ Model loaded successfully")
         
+        # Load dataset once
+        print(f"\n[{get_timestamp()}] 📥 Loading {args.benchmark} dataset...")
+        train_dataset = evaluate_model(
+            model=model,
+            processor=processor,
+            benchmark=args.benchmark,
+            split='train',
+            num_samples=N_TRAIN_SAMPLES,
+            prefix="",
+            data_dir=args.data_dir,
+            return_dataset=True
+        )
+        print(f"✅ Loaded training dataset")
+        
         # Load seed prefixes
         print(f"\n[{get_timestamp()}] 📥 Loading seed prefixes from {args.seed_file}...")
         prefixes = load_seed_prefixes(args.seed_file)
@@ -172,7 +190,7 @@ def main() -> None:
         seed_scores = []
         for i, prefix in enumerate(prefixes, 1):
             print(f"   Evaluating seed prefix {i}/{len(prefixes)}", end='\r')
-            score = fitness_function(model, processor, prefix, args.benchmark)
+            score = fitness_function(model, processor, prefix, args.benchmark, train_dataset)
             seed_scores.append(score)
         print(f"\n📊 Mean seed score: {np.mean(seed_scores):.4f}")
         
@@ -194,7 +212,7 @@ def main() -> None:
             print("\n📊 Evaluating current generation...")
             for i, prefix in enumerate(current_prefixes, 1):
                 print(f"   Evaluating prefix {i}/{len(current_prefixes)}", end='\r')
-                score = fitness_function(model, processor, prefix, args.benchmark)
+                score = fitness_function(model, processor, prefix, args.benchmark, train_dataset)
                 scores.append(score)
                 
                 if score > best_score:
