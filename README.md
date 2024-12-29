@@ -1,6 +1,6 @@
 # Evolutionary Prompt Engineering for Vision-Language Models
 ## Overview
-his repository implements an evolutionary computation framework for optimizing prompt prefixes in vision-language models (VLMs). The framework employs three theoretically-grounded selection strategies to evolve effective prompts across multiple benchmarks and model architectures.
+This repository implements an evolutionary computation framework for optimizing prompt prefixes in vision-language models (VLMs). The framework employs three theoretically-grounded selection strategies to evolve effective prompts across multiple benchmarks and model architectures.
 ## Selection Strategies
 ### 1. Tournament Selection (Default)
 mplements a standard tournament selection mechanism where k individuals are randomly sampled from the population, and the fittest individual is selected as a parent. This approach provides adjustable selection pressure through tournament size modification.
@@ -51,10 +51,25 @@ python gen_figures1.py
 - VQAv2: Accuracy
 - MMMU: Weighted combination of short-form accuracy and long-form ROUGE-L scores
 
-## File Structure
+## Key Files
+
+- `evolve_generations.py`: Implements three evolution strategies (Tournament, Rank-Based, Boltzmann)
+- `evolve.py`: Main script for running evolution experiments
+- `evals.py`: Contains evaluation metrics and dataset loading utilities
+- `models.py`: Model loading and inference implementations
+- `gen_figures1.py`: Generates comparison plots and visualizations
+- `generate_prefixes.py`: Creates initial population of prompt prefixes
+- `evolve.sh`: SLURM script for distributed execution
+
+## Generated Files
+
+- `results/evolution_results_*.json`: Evolution results for each model-benchmark combination
+- `figures/comparison_*.png`: Performance comparison plots
+
 ## Citation
 If you use this code in your research, please cite:
-bibtex
+
+```
 @misc{evolutionary_prompt_engineering,
 title={Evolutionary Prompt Engineering for Vision-Language Models},
 author={[Authors]},
@@ -63,13 +78,12 @@ publisher={GitHub},
 journal={GitHub repository},
 howpublished={\url{https://github.com/brownkat6/evolutionary-cot-vlm}}
 }
-
+```
 ## License
 [License Type]
 
 ## Acknowledgments
 This research was conducted at Harvard University no external funding sources.
-EOL
 
 
 

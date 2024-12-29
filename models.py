@@ -48,36 +48,44 @@ def load_model(model_name: str) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
         model_path = model_map[model_name.lower()]
         
         if model_name.lower() == "blip2":
-            processor = BlipProcessor.from_pretrained(
-                model_path,
-                cache_dir=CACHE_DIR
-            )
-            model = BlipForConditionalGeneration.from_pretrained(
+            from transformers import Blip2Processor, Blip2ForConditionalGeneration
+            
+            processor = Blip2Processor.from_pretrained(
                 model_path,
                 cache_dir=CACHE_DIR,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32
+                trust_remote_code=True
+            )
+            model = Blip2ForConditionalGeneration.from_pretrained(
+                model_path,
+                cache_dir=CACHE_DIR,
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                trust_remote_code=True
             ).to(device)
             
         elif model_name.lower() == "llava":
             processor = LlavaProcessor.from_pretrained(
                 model_path,
-                cache_dir=CACHE_DIR
+                cache_dir=CACHE_DIR,
+                trust_remote_code=True
             )
             model = LlavaForConditionalGeneration.from_pretrained(
                 model_path,
                 cache_dir=CACHE_DIR,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                trust_remote_code=True
             ).to(device)
             
         else:  # For minigpt4, otter, and molmo
             processor = AutoProcessor.from_pretrained(
                 model_path,
-                cache_dir=CACHE_DIR
+                cache_dir=CACHE_DIR,
+                trust_remote_code=True
             )
             model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 cache_dir=CACHE_DIR,
-                torch_dtype=torch.float16 if device == "cuda" else torch.float32
+                torch_dtype=torch.float16 if device == "cuda" else torch.float32,
+                trust_remote_code=True
             ).to(device)
         
         return model, processor
