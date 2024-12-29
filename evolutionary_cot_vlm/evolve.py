@@ -126,7 +126,7 @@ def main() -> None:
         parser.add_argument('--evolve_type', type=str, default='default',
                           choices=list(EVOLUTION_STRATEGIES.keys()),
                           help='Type of evolution strategy to use')
-        parser.add_argument('--data_dir', type=str, default="data",
+        parser.add_argument('--data_dir', type=str, default=None,
                            help='Path to dataset directory')
         args = parser.parse_args()
         
