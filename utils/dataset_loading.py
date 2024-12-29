@@ -5,7 +5,6 @@ import requests
 from datasets import Dataset
 import logging
 import os
-import shutil
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
@@ -59,32 +58,32 @@ def download_chartqa_dataset(output_dir: str = "data/chartqa") -> str:
         split_dir.mkdir(parents=True, exist_ok=True)
         
         # Download JSON file
-        json_url = f"{base_url}/{split}/{split}.json"
-        json_path = split_dir / f"{split}.json"
+        json_url = f"{base_url}/{split}/{split}_augmented.json"
+        json_path = split_dir / f"{split}_augmented.json"
         
         if not json_path.exists():
-            logger.info(f"Downloading {split}.json...")
+            logger.info(f"Downloading {split}_augmented.json...")
             try:
-                download_file(json_url, json_path, f"Downloading {split}.json")
+                download_file(json_url, json_path, f"Downloading {split}_augmented.json")
             except Exception as e:
-                raise RuntimeError(f"Failed to download {split}.json: {e}")
+                raise RuntimeError(f"Failed to download {split}_augmented.json: {e}")
         
-        # Create images directory
-        images_dir = split_dir / 'images'
-        images_dir.mkdir(exist_ok=True)
+        # Create png directory
+        png_dir = split_dir / 'png'
+        png_dir.mkdir(exist_ok=True)
         
         # Load JSON to get image filenames
         try:
             with open(json_path) as f:
                 data = json.load(f)
                 if not isinstance(data, list):
-                    raise ValueError(f"Expected list in {split}.json, got {type(data)}")
+                    raise ValueError(f"Expected list in {split}_augmented.json, got {type(data)}")
                 
                 # Download images
                 for item in tqdm(data, desc=f"Downloading {split} images"):
-                    image_filename = item['image']
-                    image_url = f"{base_url}/{split}/images/{image_filename}"
-                    image_path = images_dir / image_filename
+                    image_filename = item['imgname']
+                    image_url = f"{base_url}/{split}/png/{image_filename}"
+                    image_path = png_dir / image_filename
                     
                     if not image_path.exists():
                         try:
@@ -93,9 +92,9 @@ def download_chartqa_dataset(output_dir: str = "data/chartqa") -> str:
                             logger.warning(f"Failed to download image {image_filename}: {e}")
                             continue
                 
-                logger.info(f"Verified {split}.json structure and downloaded images")
+                logger.info(f"Verified {split}_augmented.json structure and downloaded images")
         except Exception as e:
-            raise RuntimeError(f"Failed to process {split}.json: {e}")
+            raise RuntimeError(f"Failed to process {split}_augmented.json: {e}")
     
     return str(output_path)
 
@@ -113,13 +112,13 @@ def load_local_chartqa(data_dir: str, split: str) -> Dataset:
     # Convert validation to val for file paths
     file_split = 'val' if split == 'validation' else split
     
-    data_path = Path(data_dir) / file_split / f"{file_split}.json"
-    images_dir = Path(data_dir) / file_split / 'images'
+    data_path = Path(data_dir) / file_split / f"{file_split}_augmented.json"
+    png_dir = Path(data_dir) / file_split / 'png'
     
     if not data_path.exists():
         raise FileNotFoundError(f"Dataset file not found: {data_path}")
-    if not images_dir.exists():
-        raise FileNotFoundError(f"Images directory not found: {images_dir}")
+    if not png_dir.exists():
+        raise FileNotFoundError(f"PNG directory not found: {png_dir}")
     
     with open(data_path) as f:
         data = json.load(f)
@@ -127,17 +126,17 @@ def load_local_chartqa(data_dir: str, split: str) -> Dataset:
     if not isinstance(data, list):
         raise ValueError(f"Invalid data format in {data_path}")
     
-    # Verify required fields
-    required_fields = {'question', 'answer', 'image'}
+    # Verify required fields with correct names
+    required_fields = {'imgname', 'query', 'label'}
     for item in data:
         missing_fields = required_fields - set(item.keys())
         if missing_fields:
             raise ValueError(f"Missing required fields: {missing_fields}")
     
     return Dataset.from_dict({
-        'question': [item['question'] for item in data],
-        'answer': [str(item['answer']) for item in data],
-        'image_path': [str(images_dir / item['image']) for item in data],
+        'question': [item['query'] for item in data],
+        'answer': [str(item['label']) for item in data],
+        'image_path': [str(png_dir / item['imgname']) for item in data],
         'split': [split] * len(data)
     })
 
