@@ -149,11 +149,12 @@ def evaluate_model(
         # Load dataset
         try:
             if benchmark == 'chartqa':
-                dataset = load_dataset("chart-qa", split=split)
+                dataset = load_dataset("vis-nlp/chart-qa", split=split)
             elif benchmark == 'vqav2':
                 dataset = load_dataset("vqa_v2", split=split)
             elif benchmark == 'mmmu':
-                dataset = load_dataset("MMMU/MMMU", split=split)
+                # NOTE: for now only evaluate on Computer Science subset, but eventually will want to evaluate on all subsets (probably with a different COT prefix for each subset)
+                dataset = load_dataset("MMMU/MMMU", 'Computer_Science', split=split)
         except Exception as e:
             raise DatasetLoadError(f"Error loading {benchmark} dataset: {str(e)}")
 
