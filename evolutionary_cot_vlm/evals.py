@@ -390,6 +390,10 @@ def evaluate_model(
         device = "cuda" if torch.cuda.is_available() else "cpu"
         model.to(device)
         model.eval()
+        
+        # Initialize counters
+        processed_count = 0
+        skipped_count = 0
 
         results: List[Dict[str, Any]] = []
         with torch.no_grad():
