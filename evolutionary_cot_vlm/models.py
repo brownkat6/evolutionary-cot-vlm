@@ -11,7 +11,7 @@ from transformers import (
     PreTrainedTokenizer
 )
 import torch
-from utils import CACHE_DIR
+from evolutionary_cot_vlm.constants import CACHE_DIR
 
 class ModelLoadError(Exception):
     """Custom exception for model loading errors."""
