@@ -327,7 +327,7 @@ def evaluate_model(
         
         print("\n2. Loading Data")
         if benchmark == 'chartqa':
-            dataset_path = str(dataset_dir / 'ChartQA Dataset')
+            dataset_path = str(dataset_dir)
             print(f"Loading ChartQA dataset from: {dataset_path}")
             dataset = get_chartqa_dataset(split, "local", dataset_path)
             print(f"✓ Loaded {len(dataset)} examples from ChartQA")
