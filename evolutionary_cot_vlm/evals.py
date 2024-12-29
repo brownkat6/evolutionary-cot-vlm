@@ -19,10 +19,23 @@ from parlai.core.teachers import create_task_agent_from_taskname
 from parlai.tasks.vqa_v2.agents import OeTeacher
 from constants import CHARTQA_DIR, VQA_V2_DIR, MMMU_DIR
 import zipfile
+import pickle
+from functools import lru_cache
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Add module-level cache
+_DATASET_CACHE: Dict[str, Dict[str, Any]] = {}
+
+# Get cache settings from environment variables
+_CACHE_DIR = Path(os.getenv('EVAL_CACHE_DIR', './cache'))
+_USE_CACHE = os.getenv('USE_DATASET_CACHE', '1').lower() in ('1', 'true', 'yes')
+_PRELOAD_IMAGES = os.getenv('PRELOAD_IMAGES', '1').lower() in ('1', 'true', 'yes')
+
+# Create cache directory if it doesn't exist
+_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 class EvaluationError(Exception):
     """Custom exception for evaluation errors."""
@@ -284,104 +297,187 @@ def evaluate_mmmu_answer(predicted: str, ground_truth: str, is_long_form: bool =
     except Exception as e:
         raise MetricCalculationError(f"Error calculating MMMU metric: {str(e)}")
 
-def evaluate_model(
-    model: Any,
-    processor: Any,
+def save_processed_dataset(dataset: Dataset, benchmark: str, split: str, num_samples: Optional[int] = None) -> None:
+    """Save processed dataset to disk cache."""
+    try:
+        cache_key = f"{benchmark}_{split}_{num_samples}"
+        cache_path = _CACHE_DIR / f"{cache_key}.pt"
+        torch.save(dataset, cache_path)
+        logger.info(f"Saved processed dataset to {cache_path}")
+    except Exception as e:
+        logger.warning(f"Failed to save dataset cache: {str(e)}")
+
+def load_processed_dataset(benchmark: str, split: str, num_samples: Optional[int] = None) -> Optional[Dataset]:
+    """Load processed dataset from disk cache."""
+    try:
+        cache_key = f"{benchmark}_{split}_{num_samples}"
+        cache_path = _CACHE_DIR / f"{cache_key}.pt"
+        if cache_path.exists():
+            logger.info(f"Loading cached dataset from {cache_path}")
+            return torch.load(cache_path)
+    except Exception as e:
+        logger.warning(f"Failed to load dataset cache: {str(e)}")
+    return None
+
+def preload_images(dataset: Dataset) -> Dict[str, Any]:
+    """Pre-load images into memory."""
+    logger.info("Pre-loading images into memory...")
+    images = {}
+    for item in tqdm(dataset, desc="Loading images"):
+        if 'image_path' in item:
+            try:
+                images[item['image_path']] = Image.open(item['image_path'])
+            except Exception as e:
+                logger.warning(f"Failed to load image {item['image_path']}: {str(e)}")
+    
+    return {
+        'dataset': dataset,
+        'images': images
+    }
+
+def load_benchmark_dataset(
     benchmark: str,
     split: str = "validation",
     num_samples: Optional[int] = None,
-    prefix: str = "",
     data_dir: Optional[str] = None,
-    dataset: Optional[Dataset] = None,
-    return_dataset: bool = False
-) -> Union[Dict[str, float], Dataset]:
+    use_cache: Optional[bool] = None,
+    preload_imgs: Optional[bool] = None
+) -> Dict[str, Any]:
     """
-    Evaluate model on benchmark dataset.
+    Load a benchmark dataset with caching and optional image preloading.
+    
+    Args:
+        benchmark: Name of the benchmark
+        split: Dataset split
+        num_samples: Number of samples to load
+        data_dir: Data directory
+        use_cache: Override environment cache setting
+        preload_imgs: Override environment preload setting
+        
+    Returns:
+        Dictionary containing dataset and optionally preloaded images
+    """
+    # Use environment variables if not explicitly overridden
+    use_cache = _USE_CACHE if use_cache is None else use_cache
+    preload_imgs = _PRELOAD_IMAGES if preload_imgs is None else preload_imgs
+    
+    logger.info(f"Cache directory: {_CACHE_DIR}")
+    logger.info(f"Using cache: {use_cache}")
+    logger.info(f"Preloading images: {preload_imgs}")
+    
+    # Rest of the function remains the same, but uses these variables
+    cache_key = f"{benchmark}_{split}_{num_samples}"
+    
+    if use_cache:
+        # Check memory cache
+        if cache_key in _DATASET_CACHE:
+            logger.info(f"Using in-memory cached dataset for {cache_key}")
+            return _DATASET_CACHE[cache_key]
+            
+        # Check disk cache
+        cache_path = _CACHE_DIR / f"{cache_key}.pt"
+        if cache_path.exists():
+            try:
+                logger.info(f"Loading cached dataset from {cache_path}")
+                dataset = torch.load(cache_path)
+                result = {'dataset': dataset}
+                if preload_imgs:
+                    result.update(preload_images(dataset))
+                _DATASET_CACHE[cache_key] = result
+                return result
+            except Exception as e:
+                logger.warning(f"Failed to load cache: {str(e)}")
+    
+    # Load dataset if not cached
+    logger.info(f"Loading fresh dataset for {benchmark}")
+    dataset_dir = ensure_dataset(benchmark, data_dir)
+    
+    if benchmark == 'chartqa':
+        dataset = get_chartqa_dataset(split, "local", str(dataset_dir))
+        
+    elif benchmark == 'vqav2':
+        split_map = {'train': 'train', 'validation': 'valid', 'test': 'test'}
+        parlai_split = split_map.get(split)
+        if not parlai_split:
+            raise ValueError(f"Invalid split: {split}")
+        
+        opt = Opt({
+            'task': 'vqa_v2',
+            'datatype': f'{parlai_split}:ordered',
+            'datapath': str(dataset_dir),
+        })
+        
+        teacher = create_task_agent_from_taskname(opt)[0]
+        dataset = []
+        num_examples = num_samples if num_samples else len(teacher)
+        
+        for _ in tqdm(range(num_examples), desc=f"Loading VQA-v2 {split}"):
+            reply = teacher.act()
+            if reply is None:
+                break
+            dataset.append({
+                'question': reply['text'],
+                'answers': reply['labels'],
+                'image_path': reply['image']
+            })
+            
+    elif benchmark == 'mmmu':
+        mmmu_split = {
+            'train': 'dev',
+            'validation': 'validation',
+            'test': 'test'
+        }.get(split, split)
+        
+        combined_dataset = setup_mmmu(dataset_dir)
+        dataset = combined_dataset[mmmu_split]
+    
+    else:
+        raise ValueError(f"Unknown benchmark: {benchmark}")
+
+    if num_samples:
+        dataset = dataset.select(range(min(num_samples, len(dataset))))
+    
+    # Cache the loaded dataset
+    result = {'dataset': dataset}
+    if preload_imgs:
+        result.update(preload_images(dataset))
+    
+    _DATASET_CACHE[cache_key] = result
+    
+    # Save to disk cache
+    if use_cache:
+        save_processed_dataset(dataset, benchmark, split, num_samples)
+    
+    return result
+
+def evaluate_model(
+    model: Any,
+    processor: Any,
+    dataset_dict: Dict[str, Any],
+    benchmark: str,
+    prefix: str = "",
+) -> Dict[str, float]:
+    """
+    Evaluate model on a pre-loaded dataset.
     
     Args:
         model: The model to evaluate
         processor: The model's processor/tokenizer
+        dataset_dict: Dictionary containing dataset and optionally preloaded images
         benchmark: Name of the benchmark
-        split: Split to evaluate
-        num_samples: Number of samples to evaluate
-        prefix: Prefix to evaluate
-        data_dir: Data directory
-        dataset: Optional pre-loaded dataset to use
-        return_dataset: If True, return the loaded dataset instead of evaluating
+        prefix: Prefix to add to questions
         
     Returns:
-        Either evaluation metrics or the loaded dataset
+        Evaluation metrics
     """
     try:
+        dataset = dataset_dict['dataset']
+        preloaded_images = dataset_dict.get('images', {})
+        
         print(f"\n=== Starting Evaluation on {benchmark.upper()} ===")
-        print(f"Split: {split}")
-        print(f"Samples: {'all' if num_samples is None else num_samples}")
+        print(f"Using provided dataset with {len(dataset)} samples")
+        print(f"Preloaded images: {len(preloaded_images)}")
         
-        # Ensure dataset is downloaded
-        print("\n1. Preparing Dataset")
-        dataset_dir = ensure_dataset(benchmark, data_dir)
-        
-        print("\n2. Loading Data")
-        if benchmark == 'chartqa':
-            dataset_path = str(dataset_dir)
-            print(f"Loading ChartQA dataset from: {dataset_path}")
-            dataset = get_chartqa_dataset(split, "local", dataset_path)
-            print(f"✓ Loaded {len(dataset)} examples from ChartQA")
-            print(f"  - Split: {split}")
-            print(f"  - Path: {dataset_path}")
-            
-        elif benchmark == 'vqav2':
-            # Convert split names to ParlAI format
-            split_map = {
-                'train': 'train',
-                'validation': 'valid',
-                'test': 'test'
-            }
-            parlai_split = split_map.get(split)
-            if not parlai_split:
-                raise ValueError(f"Invalid split: {split}")
-            
-            # Initialize ParlAI options with our data directory
-            opt = Opt({
-                'task': 'vqa_v2',
-                'datatype': f'{parlai_split}:ordered',
-                'datapath': str(dataset_dir),
-            })
-            
-            # Create teacher
-            teacher = create_task_agent_from_taskname(opt)[0]
-            
-            # Load examples
-            dataset = []
-            num_examples = num_samples if num_samples else len(teacher)
-            for _ in tqdm(range(num_examples), desc=f"Loading VQA-v2 {split}"):
-                reply = teacher.act()
-                if reply is None:
-                    break
-                dataset.append({
-                    'question': reply['text'],
-                    'answers': reply['labels'],
-                    'image_path': reply['image']
-                })
-            
-            print(f"✓ Loaded {len(dataset)} examples from VQA-v2")
-            
-        elif benchmark == 'mmmu':
-            mmmu_split = {
-                'train': 'dev',
-                'validation': 'validation',
-                'test': 'test'
-            }.get(split, split)
-            
-            # Load and combine all subjects
-            print(f"Loading MMMU dataset from: {dataset_dir}")
-            combined_dataset = setup_mmmu(dataset_dir)
-            dataset = combined_dataset[mmmu_split]
-            print(f"✓ Loaded {len(dataset)} examples from MMMU")
-
-        if num_samples:
-            dataset = dataset.select(range(min(num_samples, len(dataset))))
-
         # Initialize metrics
         correct = 0
         total = 0
@@ -397,28 +493,30 @@ def evaluate_model(
 
         results: List[Dict[str, Any]] = []
         with torch.no_grad():
-            for item in tqdm(dataset):
+            for idx, item in enumerate(tqdm(dataset)):
                 try:
                     # Process input based on benchmark
+                    image_path = item.get('image_path')
+                    if image_path in preloaded_images:
+                        image = preloaded_images[image_path]
+                    else:
+                        image = Image.open(image_path)
+                    
                     if benchmark == 'chartqa':
-                        image = Image.open(item['image_path'])
                         question = prefix + item['question']
                         ground_truth = str(item['answer'])
                         is_long_form = False
                         
                     elif benchmark == 'vqav2':
-                        image = Image.open(item['image_path'])
                         question = prefix + item['question']
                         ground_truth = item['answers']
                         is_long_form = False
                         
                     elif benchmark == 'mmmu':
-                        if item.get('image_path') is None:
+                        if image_path is None:
                             skipped_count += 1
                             continue
                         processed_count += 1
-                            
-                        image = Image.open(item['image_path'])
                         question = prefix + item['question']
                         ground_truth = str(item['answer'])
                         is_long_form = len(ground_truth.split()) > 15 or '\n' in ground_truth
@@ -438,6 +536,14 @@ def evaluate_model(
                     )
                     
                     predicted = processor.decode(outputs[0], skip_special_tokens=True).lower()
+                    
+                    # Print first item's prediction and ground truth
+                    if idx == 0:
+                        print("\n=== First Item Debug ===")
+                        print(f"Question: {question}")
+                        print(f"Predicted: {predicted}")
+                        print(f"Ground Truth: {ground_truth}")
+                        print("========================\n")
                     
                     # Calculate score
                     if benchmark == 'chartqa':
@@ -463,16 +569,11 @@ def evaluate_model(
                     continue
 
         # Calculate metrics
-        print("\n4. Computing Metrics")
         metrics: Dict[str, float] = {
             'accuracy': correct / total if total > 0 else 0.0,
             'total_samples': float(total),
             'correct_samples': float(correct)
         }
-        
-        print("\n=== Results ===")
-        for metric, value in metrics.items():
-            print(f"{metric}: {value:.4f}")
         
         # Add benchmark-specific metrics
         if benchmark == 'mmmu':
@@ -487,13 +588,8 @@ def evaluate_model(
                 metrics['short_form_accuracy'] = sum(r['score'] for r in short_form_results) / len(short_form_results)
                 metrics['short_form_count'] = float(len(short_form_results))
 
-        # At the end of processing
         print(f"\nMMU Stats: {processed_count} items processed, {skipped_count} items skipped (no images)")
-
-        if return_dataset:
-            return dataset
-        else:
-            return metrics
+        return metrics
 
     except Exception as e:
         print(f"\n! Error during evaluation: {str(e)}")

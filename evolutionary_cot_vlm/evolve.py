@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 from models import load_model
-from evals import evaluate_model
+from evals import evaluate_model, load_benchmark_dataset
 from evolve_generations import (
     EVOLUTION_STRATEGIES,
     EvolutionParams,
@@ -81,7 +81,7 @@ def fitness_function(
     processor: Any,
     prefix: str,
     benchmark: str,
-    dataset: Dataset,
+    dataset_dict: Dict[str, Any],
 ) -> float:
     """
     Evaluate a prefix using the benchmark-specific metric on train set samples.
@@ -91,7 +91,7 @@ def fitness_function(
         processor: The model's processor/tokenizer
         prefix: Prefix to evaluate
         benchmark: Name of the benchmark
-        dataset: Pre-loaded dataset to evaluate on
+        dataset_dict: Pre-loaded dataset dictionary with images
         
     Returns:
         Fitness score between 0 and 1
@@ -99,11 +99,9 @@ def fitness_function(
     metrics = evaluate_model(
         model=model,
         processor=processor,
+        dataset_dict=dataset_dict,
         benchmark=benchmark,
-        split='train',
-        num_samples=N_TRAIN_SAMPLES,
-        prefix=prefix,
-        dataset=dataset
+        prefix=prefix
     )
     
     if benchmark == 'mmmu':
@@ -153,34 +151,38 @@ def main() -> None:
         model, processor = load_model(args.model)
         print("✅ Model loaded successfully")
         
-        # Load dataset once
+        # Load dataset once with caching and image preloading
         print(f"\n[{get_timestamp()}] 📥 Loading {args.benchmark} dataset...")
-        train_dataset = evaluate_model(
-            model=model,
-            processor=processor,
+        train_dataset_dict = load_benchmark_dataset(
             benchmark=args.benchmark,
             split='train',
             num_samples=N_TRAIN_SAMPLES,
-            prefix="",
             data_dir=args.data_dir,
-            return_dataset=True
+            use_cache=True,
+            preload_imgs=True
         )
-        print(f"✅ Loaded training dataset")
+        print(f"✅ Loaded training dataset with {len(train_dataset_dict['dataset'])} samples")
         
         # Load seed prefixes
         print(f"\n[{get_timestamp()}] 📥 Loading seed prefixes from {args.seed_file}...")
         prefixes = load_seed_prefixes(args.seed_file)
         print(f"✅ Loaded {len(prefixes)} seed prefixes")
         
-        # Get baseline validation score
+        # Get baseline validation score using cached dataset
         print(f"\n[{get_timestamp()}] 📊 Computing baseline validation score...")
+        val_dataset_dict = load_benchmark_dataset(
+            benchmark=args.benchmark,
+            split='validation',
+            data_dir=args.data_dir,
+            use_cache=True,
+            preload_imgs=True
+        )
         baseline_metrics = evaluate_model(
             model=model,
             processor=processor,
+            dataset_dict=val_dataset_dict,
             benchmark=args.benchmark,
-            split='validation',
-            prefix="",
-            data_dir=args.data_dir
+            prefix=""
         )
         baseline_validation_score = baseline_metrics['accuracy']
         print(f"📈 Baseline validation score: {baseline_validation_score:.4f}")
@@ -190,7 +192,13 @@ def main() -> None:
         seed_scores = []
         for i, prefix in enumerate(prefixes, 1):
             print(f"   Evaluating seed prefix {i}/{len(prefixes)}", end='\r')
-            score = fitness_function(model, processor, prefix, args.benchmark, train_dataset)
+            score = fitness_function(
+                model=model,
+                processor=processor,
+                prefix=prefix,
+                benchmark=args.benchmark,
+                dataset_dict=train_dataset_dict
+            )
             seed_scores.append(score)
         print(f"\n📊 Mean seed score: {np.mean(seed_scores):.4f}")
         
@@ -212,7 +220,13 @@ def main() -> None:
             print("\n📊 Evaluating current generation...")
             for i, prefix in enumerate(current_prefixes, 1):
                 print(f"   Evaluating prefix {i}/{len(current_prefixes)}", end='\r')
-                score = fitness_function(model, processor, prefix, args.benchmark, train_dataset)
+                score = fitness_function(
+                    model=model,
+                    processor=processor,
+                    prefix=prefix,
+                    benchmark=args.benchmark,
+                    dataset_dict=train_dataset_dict
+                )
                 scores.append(score)
                 
                 if score > best_score:
@@ -247,8 +261,8 @@ def main() -> None:
         val_metrics = evaluate_model(
             model=model,
             processor=processor,
+            dataset_dict=val_dataset_dict,
             benchmark=args.benchmark,
-            split='validation',
             prefix=best_prefix
         )
         
