@@ -10,6 +10,7 @@ import numpy as np
 from rouge_score import rouge_scorer
 import logging
 from pathlib import Path
+from utils.dataset_loading import get_chartqa_dataset
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -117,47 +118,38 @@ def evaluate_model(
     benchmark: str,
     split: str = "validation",
     num_samples: Optional[int] = None,
-    prefix: str = ""
+    prefix: str = "",
+    data_dir: Optional[str] = None
 ) -> Dict[str, float]:
     """
-    Evaluate a model on a specific benchmark dataset.
-    
-    Args:
-        model: The model to evaluate
-        processor: The model's processor/tokenizer
-        benchmark: One of ['chartqa', 'vqav2', 'mmmu']
-        split: Dataset split to use ('train', 'validation', or 'test')
-        num_samples: Number of samples to evaluate (None for full dataset)
-        prefix: Optional string to prepend to each question
-    
-    Returns:
-        Dictionary containing evaluation metrics
-        
-    Raises:
-        ValueError: If benchmark or split is not supported
-        DatasetLoadError: If there's an error loading the dataset
-        EvaluationError: If there's an error during evaluation
+    Evaluate model on benchmark dataset.
     """
     try:
-        benchmark = benchmark.lower()
-        if benchmark not in ['chartqa', 'vqav2', 'mmmu']:
-            raise ValueError(f"Benchmark {benchmark} not supported. Choose from ['chartqa', 'vqav2', 'mmmu']")
-        
-        if split not in ['train', 'validation', 'test']:
-            raise ValueError(f"Split {split} not supported. Choose from ['train', 'validation', 'test']")
-
-        # Load dataset
-        try:
-            if benchmark == 'chartqa':
-                dataset = load_dataset("vis-nlp/chart-qa", split=split)
-            elif benchmark == 'vqav2':
-                dataset = load_dataset("vqa_v2", split=split)
-            elif benchmark == 'mmmu':
-                # NOTE: for now only evaluate on Computer Science subset, but eventually will want to evaluate on all subsets (probably with a different COT prefix for each subset)
-                dataset = load_dataset("MMMU/MMMU", 'Computer_Science', split=split)
-        except Exception as e:
-            raise DatasetLoadError(f"Error loading {benchmark} dataset: {str(e)}")
-
+        # Convert split names for MMMU
+        if benchmark == 'mmmu':
+            mmmu_split = {
+                'train': 'dev',
+                'validation': 'validation',
+                'test': 'test'
+            }.get(split, split)
+            
+            dataset = load_dataset("MMMU/MMMU", 'Computer_Science', split=mmmu_split)
+            
+        elif benchmark == 'chartqa':
+            # Try methods in order until one works
+            for method in ["local", "download", "huggingface"]:
+                try:
+                    dataset = get_chartqa_dataset(split, method, data_dir)
+                    logger.info(f"Successfully loaded ChartQA dataset using {method} method")
+                    break
+                except Exception as e:
+                    logger.warning(f"Failed to load dataset using {method} method: {e}")
+            else:
+                raise DatasetLoadError("Failed to load ChartQA dataset using any method")
+            
+        elif benchmark == 'vqav2':
+            dataset = load_dataset("vqa_v2", split=split)
+            
         if num_samples:
             dataset = dataset.select(range(min(num_samples, len(dataset))))
 

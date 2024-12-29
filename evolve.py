@@ -126,6 +126,8 @@ def main() -> None:
         parser.add_argument('--evolve_type', type=str, default='default',
                           choices=list(EVOLUTION_STRATEGIES.keys()),
                           help='Type of evolution strategy to use')
+        parser.add_argument('--data_dir', type=str, default="data",
+                           help='Path to dataset directory')
         args = parser.parse_args()
         
         print(f"📋 Configuration:")
@@ -159,7 +161,8 @@ def main() -> None:
             processor=processor,
             benchmark=args.benchmark,
             split='validation',
-            prefix=""
+            prefix="",
+            data_dir=args.data_dir
         )
         baseline_validation_score = baseline_metrics['accuracy']
         print(f"📈 Baseline validation score: {baseline_validation_score:.4f}")
