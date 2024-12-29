@@ -401,6 +401,10 @@ def load_benchmark_dataset(
         parlai_split = split_map.get(split)
         if not parlai_split:
             raise ValueError(f"Invalid split: {split}")
+            
+        # Map splits to COCO image directory names
+        coco_split_map = {'train': 'train', 'valid': 'val', 'test': 'test'}
+        coco_split = coco_split_map[parlai_split]
         
         opt = Opt({
             'task': 'vqa_v2',
@@ -408,7 +412,10 @@ def load_benchmark_dataset(
             'datapath': str(dataset_dir),
         })
         
-        teacher = create_task_agent_from_taskname(opt)[0]
+        # Specifically use OeTeacher
+        teacher = OeTeacher(opt)
+        teacher.reset()  # Ensure we start from beginning
+        
         dataset = []
         num_examples = num_samples if num_samples else len(teacher)
         
@@ -423,13 +430,14 @@ def load_benchmark_dataset(
             image_path = os.path.join(
                 str(dataset_dir),
                 'images',
-                f"{split}2014",
-                f"COCO_{split}2014_{image_id:012d}.jpg"
+                f"{coco_split}2014",
+                f"COCO_{coco_split}2014_{image_id:012d}.jpg"
             )
             
+            # According to ParlAI docs, answers are in 'labels' field
             dataset.append({
                 'question': reply['text'],
-                'answers': reply['labels'],
+                'answers': reply['labels'],  # This is correct per ParlAI docs
                 'image_path': image_path
             })
             
