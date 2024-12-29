@@ -35,8 +35,12 @@ class MetricCalculationError(Exception):
     """Custom exception for metric calculation errors."""
     pass
 
-def download_chartqa(output_dir: Path) -> None:
-    """Download ChartQA dataset to specified directory."""
+def download_chartqa(output_dir: Path = CHARTQA_DIR) -> None:
+    """
+    Download ChartQA dataset to specified directory.
+    Default directory is CHARTQA_DIR from constants.
+    """
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n=== Downloading ChartQA Dataset to {output_dir} ===")
     
@@ -104,9 +108,7 @@ def setup_mmmu(output_dir: Path) -> None:
     print(f"✓ MMMU dataset successfully set up in {output_dir}")
 
 def ensure_dataset(benchmark: str, data_dir: Optional[str] = None) -> Path:
-    """
-    Ensure dataset is downloaded and return its path.
-    """
+    """Ensure dataset is downloaded and return its path."""
     print(f"\n=== Checking {benchmark.upper()} Dataset ===")
     
     if benchmark == 'chartqa':
@@ -329,7 +331,11 @@ def evaluate_model(
                         is_long_form = False
                         
                     elif benchmark == 'mmmu':
-                        image = Image.open(BytesIO(requests.get(item['image_url']).content))
+                        if item.get('image_path') is None:
+                            logger.warning(f"Skipping item: no image_path provided")
+                            continue
+                            
+                        image = Image.open(item['image_path'])
                         question = prefix + item['question']
                         ground_truth = str(item['answer'])
                         is_long_form = len(ground_truth.split()) > 15 or '\n' in ground_truth
