@@ -82,19 +82,24 @@ If you use this code in your research, please cite:
 
 ```
 @misc{evolutionary_prompt_engineering,
-title={Evolutionary Prompt Engineering for Vision-Language Models},
-author={[Authors]},
-year={2024},
+title="Evolutionary Prompt Engineering for Vision-Language Models",
+author="Brown, Katrina and Rho, John and Bhalthuwar, Sid",
+year="2024",
 publisher={GitHub},
 journal={GitHub repository},
 howpublished={\url{https://github.com/brownkat6/evolutionary-cot-vlm}}
 }
 ```
-## License
-[License Type]
 
 ## Acknowledgments
 This research was conducted at Harvard University no external funding sources.
 
+
+Data download
+```
+wget -O chartqa.zip "https://huggingface.co/datasets/ahmed-masry/ChartQA/resolve/main/ChartQA%20Dataset.zip" && \
+unzip chartqa.zip -d CHARTQA_DIR && \
+rm chartqa.zip
+```
 
 

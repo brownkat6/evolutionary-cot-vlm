@@ -16,6 +16,7 @@ requests>=2.28.0  # For downloading data/images
 
 # Evaluation metrics
 rouge-score>=0.1.2  # For MMMU evaluation
+parlai>=1.0.0  # For VQA-v2 dataset
 
 # Logging and progress bars
 tqdm>=4.65.0

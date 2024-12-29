@@ -10,7 +10,14 @@ import numpy as np
 from rouge_score import rouge_scorer
 import logging
 from pathlib import Path
+import os
+import shutil
 from utils.dataset_loading import get_chartqa_dataset
+import parlai.core.build_data as build_data
+from parlai.core.opt import Opt
+from parlai.core.teachers import create_task_agent_from_taskname
+from parlai.tasks.vqa_v2.agents import OeTeacher
+from .constants import CHARTQA_DIR, VQA_V2_DIR, MMMU_DIR
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -27,6 +34,109 @@ class DatasetLoadError(Exception):
 class MetricCalculationError(Exception):
     """Custom exception for metric calculation errors."""
     pass
+
+def download_chartqa(output_dir: Path) -> None:
+    """Download ChartQA dataset to specified directory."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\n=== Downloading ChartQA Dataset to {output_dir} ===")
+    
+    # Download from HuggingFace
+    url = "https://huggingface.co/datasets/ahmed-masry/ChartQA/resolve/main/ChartQA%20Dataset.zip"
+    zip_path = output_dir / "chartqa.zip"
+    
+    print("1. Downloading zip file...")
+    response = requests.get(url, stream=True)
+    response.raise_for_status()
+    
+    total_size = int(response.headers.get('content-length', 0))
+    with open(zip_path, 'wb') as f, tqdm(
+        total=total_size,
+        unit='iB',
+        unit_scale=True,
+        desc="Downloading"
+    ) as pbar:
+        for data in response.iter_content(8192):
+            size = f.write(data)
+            pbar.update(size)
+    
+    print("2. Extracting files...")
+    shutil.unpack_archive(zip_path, output_dir)
+    
+    print("3. Cleaning up...")
+    zip_path.unlink()
+    print(f"✓ ChartQA dataset successfully downloaded to {output_dir}")
+
+def setup_vqa_v2(output_dir: Path) -> None:
+    """Setup VQA-v2 dataset using ParlAI."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\n=== Setting up VQA-v2 Dataset in {output_dir} ===")
+    
+    print("1. Initializing ParlAI...")
+    opt = Opt({
+        'task': 'vqa_v2',
+        'datatype': 'train:ordered',
+        'datapath': str(output_dir),
+    })
+    
+    print("2. Downloading dataset (this may take a while)...")
+    teacher = create_task_agent_from_taskname(opt)[0]
+    
+    print("3. Verifying download...")
+    images_dir = output_dir / 'images'
+    questions_dir = output_dir / 'questions'
+    if images_dir.exists() and questions_dir.exists():
+        print(f"✓ VQA-v2 dataset successfully set up in {output_dir}")
+    else:
+        print("! Warning: Some expected directories are missing")
+
+def setup_mmmu(output_dir: Path) -> None:
+    """Setup MMMU dataset using HuggingFace."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"\n=== Setting up MMMU Dataset in {output_dir} ===")
+    
+    print("1. Downloading from HuggingFace...")
+    dataset = load_dataset("MMMU/MMMU", 'Computer_Science', cache_dir=str(output_dir))
+    
+    print("2. Verifying splits...")
+    for split in ['dev', 'validation', 'test']:
+        if split in dataset:
+            print(f"  ✓ Found {split} split with {len(dataset[split])} examples")
+    print(f"✓ MMMU dataset successfully set up in {output_dir}")
+
+def ensure_dataset(benchmark: str, data_dir: Optional[str] = None) -> Path:
+    """
+    Ensure dataset is downloaded and return its path.
+    """
+    print(f"\n=== Checking {benchmark.upper()} Dataset ===")
+    
+    if benchmark == 'chartqa':
+        output_dir = Path(data_dir or CHARTQA_DIR)
+        if not (output_dir / 'train' / 'train_augmented.json').exists():
+            print("! ChartQA dataset not found. Starting download...")
+            download_chartqa(output_dir)
+        else:
+            print("✓ ChartQA dataset already exists")
+            
+    elif benchmark == 'vqav2':
+        output_dir = Path(data_dir or VQA_V2_DIR)
+        if not (output_dir / 'images').exists():
+            print("! VQA-v2 dataset not found. Starting setup...")
+            setup_vqa_v2(output_dir)
+        else:
+            print("✓ VQA-v2 dataset already exists")
+            
+    elif benchmark == 'mmmu':
+        output_dir = Path(data_dir or MMMU_DIR)
+        if not output_dir.exists():
+            print("! MMMU dataset not found. Starting setup...")
+            setup_mmmu(output_dir)
+        else:
+            print("✓ MMMU dataset already exists")
+            
+    else:
+        raise ValueError(f"Unknown benchmark: {benchmark}")
+        
+    return output_dir
 
 def evaluate_chartqa_answer(predicted: str, ground_truth: str) -> float:
     """
@@ -125,31 +235,70 @@ def evaluate_model(
     Evaluate model on benchmark dataset.
     """
     try:
-        # Convert split names for MMMU
-        if benchmark == 'mmmu':
+        print(f"\n=== Starting Evaluation on {benchmark.upper()} ===")
+        print(f"Split: {split}")
+        print(f"Samples: {'all' if num_samples is None else num_samples}")
+        
+        # Ensure dataset is downloaded
+        print("\n1. Preparing Dataset")
+        dataset_dir = ensure_dataset(benchmark, data_dir)
+        
+        print("\n2. Loading Data")
+        if benchmark == 'chartqa':
+            dataset = get_chartqa_dataset(split, "local", str(dataset_dir))
+            print(f"✓ Loaded {len(dataset)} examples from ChartQA")
+            
+        elif benchmark == 'vqav2':
+            # Convert split names to ParlAI format
+            split_map = {
+                'train': 'train',
+                'validation': 'valid',
+                'test': 'test'
+            }
+            parlai_split = split_map.get(split)
+            if not parlai_split:
+                raise ValueError(f"Invalid split: {split}")
+            
+            # Initialize ParlAI options with our data directory
+            opt = Opt({
+                'task': 'vqa_v2',
+                'datatype': f'{parlai_split}:ordered',
+                'datapath': str(dataset_dir),
+            })
+            
+            # Create teacher
+            teacher = create_task_agent_from_taskname(opt)[0]
+            
+            # Load examples
+            dataset = []
+            num_examples = num_samples if num_samples else len(teacher)
+            for _ in tqdm(range(num_examples), desc=f"Loading VQA-v2 {split}"):
+                reply = teacher.act()
+                if reply is None:
+                    break
+                dataset.append({
+                    'question': reply['text'],
+                    'answers': reply['labels'],
+                    'image_path': reply['image']
+                })
+            
+            print(f"✓ Loaded {len(dataset)} examples from VQA-v2")
+            
+        elif benchmark == 'mmmu':
             mmmu_split = {
                 'train': 'dev',
                 'validation': 'validation',
                 'test': 'test'
             }.get(split, split)
-            
-            dataset = load_dataset("MMMU/MMMU", 'Computer_Science', split=mmmu_split)
-            
-        elif benchmark == 'chartqa':
-            # Try methods in order until one works
-            for method in ["local", "download", "huggingface"]:
-                try:
-                    dataset = get_chartqa_dataset(split, method, data_dir)
-                    logger.info(f"Successfully loaded ChartQA dataset using {method} method")
-                    break
-                except Exception as e:
-                    logger.warning(f"Failed to load dataset using {method} method: {e}")
-            else:
-                raise DatasetLoadError("Failed to load ChartQA dataset using any method")
-            
-        elif benchmark == 'vqav2':
-            dataset = load_dataset("vqa_v2", split=split)
-            
+            dataset = load_dataset(
+                "MMMU/MMMU",
+                'Computer_Science',
+                split=mmmu_split,
+                cache_dir=str(dataset_dir)
+            )
+
+            print(f"✓ Loaded {len(dataset)} examples from MMMU")
+
         if num_samples:
             dataset = dataset.select(range(min(num_samples, len(dataset))))
 
@@ -168,13 +317,13 @@ def evaluate_model(
                 try:
                     # Process input based on benchmark
                     if benchmark == 'chartqa':
-                        image = Image.open(BytesIO(requests.get(item['image']).content))
+                        image = Image.open(item['image_path'])
                         question = prefix + item['question']
                         ground_truth = str(item['answer'])
                         is_long_form = False
                         
                     elif benchmark == 'vqav2':
-                        image = Image.open(BytesIO(requests.get(item['image']).content))
+                        image = Image.open(item['image_path'])
                         question = prefix + item['question']
                         ground_truth = item['answers']
                         is_long_form = False
@@ -225,11 +374,16 @@ def evaluate_model(
                     continue
 
         # Calculate metrics
+        print("\n4. Computing Metrics")
         metrics: Dict[str, float] = {
             'accuracy': correct / total if total > 0 else 0.0,
             'total_samples': float(total),
             'correct_samples': float(correct)
         }
+        
+        print("\n=== Results ===")
+        for metric, value in metrics.items():
+            print(f"{metric}: {value:.4f}")
         
         # Add benchmark-specific metrics
         if benchmark == 'mmmu':
@@ -247,6 +401,7 @@ def evaluate_model(
         return metrics
 
     except Exception as e:
+        print(f"\n! Error during evaluation: {str(e)}")
         raise EvaluationError(f"Error during evaluation: {str(e)}")
 
 def save_results(benchmark: str, results: List[Dict], metrics: Dict[str, float]) -> None:
