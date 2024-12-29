@@ -21,6 +21,7 @@ from constants import CHARTQA_DIR, VQA_V2_DIR, MMMU_DIR
 import zipfile
 import pickle
 from functools import lru_cache
+import base64
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -415,10 +416,21 @@ def load_benchmark_dataset(
             reply = teacher.act()
             if reply is None:
                 break
+            
+            # The image path needs to be constructed from the image_id
+            image_id = reply['image_id']
+            # Format: COCO_[split]2014_000000000000.jpg
+            image_path = os.path.join(
+                str(dataset_dir),
+                'images',
+                f"{split}2014",
+                f"COCO_{split}2014_{image_id:012d}.jpg"
+            )
+            
             dataset.append({
                 'question': reply['text'],
                 'answers': reply['labels'],
-                'image_path': reply['image']
+                'image_path': image_path
             })
             
     elif benchmark == 'mmmu':
@@ -430,6 +442,25 @@ def load_benchmark_dataset(
         
         combined_dataset = setup_mmmu(dataset_dir)
         dataset = combined_dataset[mmmu_split]
+        
+        # Convert base64 images to PIL Images
+        processed_dataset = []
+        for item in dataset:
+            if 'image' in item and item['image']:
+                try:
+                    # Decode base64 image
+                    image_bytes = BytesIO(base64.b64decode(item['image']))
+                    image = Image.open(image_bytes)
+                    processed_item = {
+                        'question': item['question'],
+                        'answer': item['answer'],
+                        'image': image  # Store the PIL Image directly
+                    }
+                    processed_dataset.append(processed_item)
+                except Exception as e:
+                    logger.warning(f"Failed to process image: {str(e)}")
+                    continue
+        dataset = processed_dataset
     
     else:
         raise ValueError(f"Unknown benchmark: {benchmark}")
@@ -513,10 +544,11 @@ def evaluate_model(
                         is_long_form = False
                         
                     elif benchmark == 'mmmu':
-                        if image_path is None:
+                        if 'image' not in item:
                             skipped_count += 1
                             continue
                         processed_count += 1
+                        image = item['image']  # Already a PIL Image
                         question = prefix + item['question']
                         ground_truth = str(item['answer'])
                         is_long_form = len(ground_truth.split()) > 15 or '\n' in ground_truth
@@ -537,13 +569,13 @@ def evaluate_model(
                     
                     predicted = processor.decode(outputs[0], skip_special_tokens=True).lower()
                     
-                    # Print first item's prediction and ground truth
-                    if idx == 0:
-                        print("\n=== First Item Debug ===")
+                    # Print first 5 items' predictions and ground truth
+                    if idx < 5:
+                        print(f"\n=== Item {idx + 1} Debug ===")
                         print(f"Question: {question}")
                         print(f"Predicted: {predicted}")
                         print(f"Ground Truth: {ground_truth}")
-                        print("========================\n")
+                        print("========================")
                     
                     # Calculate score
                     if benchmark == 'chartqa':
