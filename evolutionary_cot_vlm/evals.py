@@ -116,7 +116,7 @@ def ensure_dataset(benchmark: str, data_dir: Optional[str] = None) -> Path:
     print(f"\n=== Checking {benchmark.upper()} Dataset ===")
     
     if benchmark == 'chartqa':
-        output_dir = Path(data_dir or CHARTQA_DIR)
+        output_dir = Path(CHARTQA_DIR)
         print(f"ChartQA directory: {output_dir.absolute()}")
         if not (output_dir / 'train' / 'train_augmented.json').exists():
             print("! ChartQA dataset not found. Starting download...")
@@ -125,7 +125,7 @@ def ensure_dataset(benchmark: str, data_dir: Optional[str] = None) -> Path:
             print("✓ ChartQA dataset already exists")
             
     elif benchmark == 'vqav2':
-        output_dir = Path(data_dir or VQA_V2_DIR)
+        output_dir = Path(VQA_V2_DIR)
         print(f"VQA-v2 directory: {output_dir.absolute()}")
         if not (output_dir / 'images').exists():
             print("! VQA-v2 dataset not found. Starting setup...")
@@ -136,7 +136,7 @@ def ensure_dataset(benchmark: str, data_dir: Optional[str] = None) -> Path:
             print(f"  - Questions: {(output_dir / 'questions').absolute()}")
             
     elif benchmark == 'mmmu':
-        output_dir = Path(data_dir or MMMU_DIR)
+        output_dir = Path(MMMU_DIR)
         print(f"MMMU directory: {output_dir.absolute()}")
         if not output_dir.exists():
             print("! MMMU dataset not found. Starting setup...")
