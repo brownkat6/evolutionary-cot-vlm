@@ -73,7 +73,8 @@ def download_chartqa(output_dir: Path = CHARTQA_DIR) -> None:
 def setup_vqa_v2(output_dir: Path) -> None:
     """Setup VQA-v2 dataset using ParlAI."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    print(f"\n=== Setting up VQA-v2 Dataset in {output_dir} ===")
+    print(f"\n=== Setting up VQA-v2 Dataset ===")
+    print(f"Target directory: {output_dir.absolute()}")
     
     print("1. Initializing ParlAI...")
     opt = Opt({
@@ -88,6 +89,9 @@ def setup_vqa_v2(output_dir: Path) -> None:
     print("3. Verifying download...")
     images_dir = output_dir / 'images'
     questions_dir = output_dir / 'questions'
+    print(f"Checking paths:")
+    print(f"  - Images: {images_dir.absolute()}")
+    print(f"  - Questions: {questions_dir.absolute()}")
     if images_dir.exists() and questions_dir.exists():
         print(f"✓ VQA-v2 dataset successfully set up in {output_dir}")
     else:
@@ -113,6 +117,7 @@ def ensure_dataset(benchmark: str, data_dir: Optional[str] = None) -> Path:
     
     if benchmark == 'chartqa':
         output_dir = Path(data_dir or CHARTQA_DIR)
+        print(f"ChartQA directory: {output_dir.absolute()}")
         if not (output_dir / 'train' / 'train_augmented.json').exists():
             print("! ChartQA dataset not found. Starting download...")
             download_chartqa(output_dir)
@@ -121,19 +126,24 @@ def ensure_dataset(benchmark: str, data_dir: Optional[str] = None) -> Path:
             
     elif benchmark == 'vqav2':
         output_dir = Path(data_dir or VQA_V2_DIR)
+        print(f"VQA-v2 directory: {output_dir.absolute()}")
         if not (output_dir / 'images').exists():
             print("! VQA-v2 dataset not found. Starting setup...")
             setup_vqa_v2(output_dir)
         else:
             print("✓ VQA-v2 dataset already exists")
+            print(f"  - Images: {(output_dir / 'images').absolute()}")
+            print(f"  - Questions: {(output_dir / 'questions').absolute()}")
             
     elif benchmark == 'mmmu':
         output_dir = Path(data_dir or MMMU_DIR)
+        print(f"MMMU directory: {output_dir.absolute()}")
         if not output_dir.exists():
             print("! MMMU dataset not found. Starting setup...")
             setup_mmmu(output_dir)
         else:
             print("✓ MMMU dataset already exists")
+            print(f"  - Cache directory: {output_dir.absolute()}")
             
     else:
         raise ValueError(f"Unknown benchmark: {benchmark}")
