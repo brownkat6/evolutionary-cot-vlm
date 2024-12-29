@@ -17,7 +17,7 @@ import parlai.core.build_data as build_data
 from parlai.core.opt import Opt
 from parlai.core.teachers import create_task_agent_from_taskname
 from parlai.tasks.vqa_v2.agents import OeTeacher
-from .constants import CHARTQA_DIR, VQA_V2_DIR, MMMU_DIR
+from constants import CHARTQA_DIR, VQA_V2_DIR, MMMU_DIR
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
