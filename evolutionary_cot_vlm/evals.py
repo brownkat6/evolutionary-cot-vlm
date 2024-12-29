@@ -377,18 +377,10 @@ def evaluate_model(
                 'test': 'test'
             }.get(split, split)
             
-            # Load all subjects
-            dataset = load_dataset(
-                "MMMU/MMMU",
-                "*",  # Load all configurations
-                split=mmmu_split,
-                cache_dir=str(dataset_dir)
-            )
-
-            # Initialize counters
-            skipped_count = 0
-            processed_count = 0
-
+            # Load and combine all subjects
+            print(f"Loading MMMU dataset from: {dataset_dir}")
+            combined_dataset = setup_mmmu(dataset_dir)
+            dataset = combined_dataset[mmmu_split]
             print(f"✓ Loaded {len(dataset)} examples from MMMU")
 
         if num_samples:
