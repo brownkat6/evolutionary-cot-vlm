@@ -5,7 +5,7 @@ import numpy as np
 import argparse
 import os
 from pathlib import Path
-import logging
+from datetime import datetime
 from models import load_model
 from evals import evaluate_model
 from evolve_generations import (
@@ -14,9 +14,9 @@ from evolve_generations import (
     mutate_prefix
 )
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+def get_timestamp() -> str:
+    """Get current timestamp for printing."""
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # Constants
 N_GENERATIONS = 5
@@ -113,6 +113,9 @@ def fitness_function(
 def main() -> None:
     """Main function for running the evolution process."""
     try:
+        print(f"\n[{get_timestamp()}] 🚀 Starting evolution process...\n")
+        
+        # Parse arguments
         parser = argparse.ArgumentParser()
         parser.add_argument('--model', type=str, required=True,
                           choices=['blip2', 'llava', 'minigpt4', 'otter', 'molmo'])
@@ -124,23 +127,33 @@ def main() -> None:
                           choices=list(EVOLUTION_STRATEGIES.keys()),
                           help='Type of evolution strategy to use')
         args = parser.parse_args()
+        
+        print(f"📋 Configuration:")
+        print(f"   Model: {args.model}")
+        print(f"   Benchmark: {args.benchmark}")
+        print(f"   Evolution type: {args.evolve_type}")
+        print(f"   Seed file: {args.seed_file}\n")
 
         # Get evolution strategy
         evolution_strategy = EVOLUTION_STRATEGIES[args.evolve_type]
+        print(f"🔄 Using {args.evolve_type} evolution strategy")
         
         # Create results directory
         os.makedirs('results', exist_ok=True)
+        print("📁 Created results directory")
 
         # Load model
-        logger.info("Loading model...")
+        print(f"\n[{get_timestamp()}] 🤖 Loading {args.model} model...")
         model, processor = load_model(args.model)
+        print("✅ Model loaded successfully")
         
         # Load seed prefixes
-        logger.info("Loading seed prefixes...")
+        print(f"\n[{get_timestamp()}] 📥 Loading seed prefixes from {args.seed_file}...")
         prefixes = load_seed_prefixes(args.seed_file)
+        print(f"✅ Loaded {len(prefixes)} seed prefixes")
         
         # Get baseline validation score
-        logger.info("Getting baseline validation score...")
+        print(f"\n[{get_timestamp()}] 📊 Computing baseline validation score...")
         baseline_metrics = evaluate_model(
             model=model,
             processor=processor,
@@ -149,13 +162,16 @@ def main() -> None:
             prefix=""
         )
         baseline_validation_score = baseline_metrics['accuracy']
+        print(f"📈 Baseline validation score: {baseline_validation_score:.4f}")
         
         # Evaluate seed prefixes
-        logger.info("Evaluating seed prefixes...")
+        print(f"\n[{get_timestamp()}] 🔍 Evaluating seed prefixes...")
         seed_scores = []
-        for prefix in prefixes:
+        for i, prefix in enumerate(prefixes, 1):
+            print(f"   Evaluating seed prefix {i}/{len(prefixes)}", end='\r')
             score = fitness_function(model, processor, prefix, args.benchmark)
             seed_scores.append(score)
+        print(f"\n📊 Mean seed score: {np.mean(seed_scores):.4f}")
         
         # Evolution loop
         current_prefixes = prefixes
@@ -163,38 +179,50 @@ def main() -> None:
         best_score = float('-inf')
         generation_best_scores: List[float] = []
         
-        logger.info(f"Starting evolution using {args.evolve_type} strategy...")
+        print(f"\n[{get_timestamp()}] 🧬 Starting evolution process...")
         validate_evolution_params(EVOLUTION_PARAMS)
+        
         for generation in range(N_GENERATIONS):
-            logger.info(f"Generation {generation + 1}/{N_GENERATIONS}")
+            print(f"\n{'='*60}")
+            print(f"🔄 Generation {generation + 1}/{N_GENERATIONS}")
+            print(f"{'='*60}")
             
             scores = []
-            for prefix in current_prefixes:
+            print("\n📊 Evaluating current generation...")
+            for i, prefix in enumerate(current_prefixes, 1):
+                print(f"   Evaluating prefix {i}/{len(current_prefixes)}", end='\r')
                 score = fitness_function(model, processor, prefix, args.benchmark)
                 scores.append(score)
                 
                 if score > best_score:
                     best_score = score
                     best_prefix = prefix
+                    print(f"\n🌟 New best score: {best_score:.4f}")
             
             generation_best = max(scores)
             generation_best_scores.append(float(generation_best))
             
-            logger.info(f"Generation best score: {generation_best:.4f}")
+            print(f"\n📈 Generation {generation + 1} Statistics:")
+            print(f"   Best score:  {generation_best:.4f}")
+            print(f"   Mean score:  {np.mean(scores):.4f}")
+            print(f"   Std score:   {np.std(scores):.4f}")
             
-            # Evolve new generation using selected strategy
+            # Evolve new generation
+            print("\n🧬 Evolving new generation...")
             current_prefixes = evolution_strategy(
                 prefixes=current_prefixes,
                 fitness_scores=scores,
                 params=EVOLUTION_PARAMS,
                 mutate_fn=mutate_prefix
             )
+            print("✅ New generation created")
         
         # Evaluate best prefix on validation set
-        logger.info("Evaluating best prefix on validation set...")
+        print(f"\n[{get_timestamp()}] 🎯 Evaluating best prefix on validation set...")
         if best_prefix is None:
             raise EvolutionError("No best prefix found during evolution")
             
+        print(f"\n🏆 Best prefix found: {best_prefix}")
         val_metrics = evaluate_model(
             model=model,
             processor=processor,
@@ -202,6 +230,12 @@ def main() -> None:
             split='validation',
             prefix=best_prefix
         )
+        
+        final_validation_score = val_metrics['accuracy']
+        improvement = final_validation_score - baseline_validation_score
+        print(f"\n📊 Final Results:")
+        print(f"   Validation score: {final_validation_score:.4f}")
+        print(f"   Improvement: {improvement:.4f} ({improvement*100:.1f}%)")
         
         # Save results
         results = {
@@ -219,14 +253,15 @@ def main() -> None:
         }
         
         results_path = Path('results') / f'evolution_results_{args.benchmark}_{args.model}_{args.evolve_type}.json'
+        print(f"\n💾 Saving results to {results_path}")
         with open(results_path, 'w') as f:
             json.dump(results, f, indent=2)
             
-        logger.info(f"Results saved to {results_path}")
+        print(f"\n[{get_timestamp()}] ✨ Evolution process completed successfully!\n")
 
     except Exception as e:
-        logger.error(f"Evolution process failed: {str(e)}")
-        raise EvolutionError(f"Evolution process failed: {str(e)}")
+        print(f"\n❌ Error: Evolution process failed: {str(e)}")
+        raise
 
 if __name__ == "__main__":
     main() 

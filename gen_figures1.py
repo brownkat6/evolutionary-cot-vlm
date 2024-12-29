@@ -8,6 +8,14 @@ from glob import glob
 from pathlib import Path
 import logging
 
+'''
+python gen_figures1.py
+
+# 9. Verify outputs
+ls -l figures/comparison_*.png
+ls -l results/evolution_results_*.json
+'''
+
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
