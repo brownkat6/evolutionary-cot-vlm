@@ -21,19 +21,30 @@ tilizes an exponential scaling of fitness values controlled by a temperature par
 ## Installation
 ### Environment Setup
 Create conda environment
+
+```
 mamba create --prefix /path/to/env/evolve_env python=3.9
 mamba activate /path/to/env/evolve_env
+```
 Install dependencies
+```
 mamba install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 mamba install -c conda-forge numpy pandas matplotlib seaborn transformers accelerate datasets pillow requests tqdm scikit-learn tensorboard jupyter bitsandbytes
 pip install rouge-score
-bash
+```
+
 Generate seed prefixes
+```
 python generate_prefixes.py
+```
 Launch evolution jobs
+```
 sbatch evolve.sh
+```
 Generate analysis figures
+```
 python gen_figures1.py
+```
 
 ## Implementation Details
 
