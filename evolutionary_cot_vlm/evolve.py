@@ -166,6 +166,11 @@ def main() -> None:
             use_cache=None,
             preload_imgs=True
         )
+        try:
+            train_dataset_dict['dataset'] = train_dataset_dict['dataset'][:N_TRAIN_SAMPLES]
+        except IndexError:
+            print(f"Warning: Couldn't limit train dataset to {N_TRAIN_SAMPLES} samples. Using all available samples.")
+            print(train_dataset_dict['dataset'])
         print(f"✅ Loaded training dataset with {len(train_dataset_dict['dataset'])} samples")
         
         # Load seed prefixes
@@ -183,6 +188,12 @@ def main() -> None:
             use_cache=None,
             preload_imgs=True
         )
+        # convert val_dataset_dict to only contain N_VAL_SAMPLES items
+        try:
+            val_dataset_dict['dataset'] = val_dataset_dict['dataset'][:N_VAL_SAMPLES]
+        except IndexError:
+            print(f"Warning: Couldn't limit validation dataset to {N_VAL_SAMPLES} samples. Using all available samples.")
+            print(val_dataset_dict['dataset'])
         print(f"✅ Loaded validation dataset with {len(val_dataset_dict['dataset'])} samples")
         baseline_metrics = evaluate_model(
             model=model,
