@@ -20,12 +20,12 @@ def get_timestamp() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 # Constants
-N_GENERATIONS = 5
-N_TRAIN_SAMPLES = 100
+N_GENERATIONS = 2
+N_TRAIN_SAMPLES = 10
 
 # Evolution parameters
 EVOLUTION_PARAMS = EvolutionParams(
-    population_size=100,
+    population_size=10,
     elite_size=10,
     mutation_rate=0.3,
     tournament_size=5,

@@ -532,22 +532,91 @@ def evaluate_model(
         skipped_count = 0
 
         results: List[Dict[str, Any]] = []
+        
         # If using BLIP-2, set required attributes
         if isinstance(processor, Blip2Processor):
             processor.image_processor.is_vqa = True
             processor.image_processor.patch_size = 14
             processor.tokenizer.truncation_side = "left"
+        # If using LLaVa, set required attributes
+        elif isinstance(processor, LlavaProcessor):
+            # Set these attributes before any processing
+            processor.image_processor.size = {"height": 336, "width": 336}  # LLaVa's default size
+            processor.image_processor.patch_size = 14  # Set on image_processor instead
+            processor.image_processor.vision_feature_select_strategy = "full"  # Set on image_processor instead
+            processor.is_vqa = True  # Add VQA flag for proper processing
+            logger.info("LLaVa processor configured with:")
+            logger.info(f"  - Image size: {processor.image_processor.size}")
+            logger.info(f"  - Patch size: {processor.image_processor.patch_size}")
+            logger.info(f"  - Feature strategy: {processor.image_processor.vision_feature_select_strategy}")
 
         with torch.no_grad():
             for idx, item in enumerate(tqdm(dataset)):
                 try:
-                    # Process input based on benchmark
-                    image_path = item.get('image_path')
-                    if image_path in preloaded_images:
-                        image = preloaded_images[image_path]
-                    else:
-                        image = Image.open(image_path)
-                    
+                    if benchmark == 'chartqa':
+                        # For ChartQA, handle multiple images
+                        if isinstance(processor, LlavaProcessor):
+                            # Get all images
+                            if isinstance(item.get('image_path'), list):
+                                images = []
+                                for img_path in item.get('image_path'):
+                                    if img_path in preloaded_images:
+                                        images.append(preloaded_images[img_path])
+                                    else:
+                                        images.append(Image.open(img_path))
+                                
+                                # Calculate grid dimensions (2x3 grid for 5 images)
+                                n_images = len(images)
+                                grid_size = (2, 3)  # rows x cols
+                                
+                                # Use LLaVa's expected image size for the final image
+                                final_width = 336
+                                final_height = 336
+                                
+                                # Calculate cell size to fit within final dimensions
+                                cell_width = final_width // grid_size[1]
+                                cell_height = final_height // grid_size[0]
+                                
+                                # Create new image with grid layout
+                                combined_image = Image.new('RGB', (final_width, final_height))
+                                
+                                # Paste images into grid
+                                for i, img in enumerate(images):
+                                    if i >= grid_size[0] * grid_size[1]:
+                                        break
+                                    # Resize image to fit cell while maintaining aspect ratio
+                                    img = resize_image_aspect_ratio(img, cell_width, cell_height)
+                                    row = i // grid_size[1]
+                                    col = i % grid_size[1]
+                                    # Center image in its cell
+                                    x_offset = col * cell_width + (cell_width - img.width) // 2
+                                    y_offset = row * cell_height + (cell_height - img.height) // 2
+                                    combined_image.paste(img, (x_offset, y_offset))
+                                
+                                # Add debug logging
+                                logger.info(f"Processing item {idx}:")
+                                logger.info(f"  - Number of source images: {len(images)}")
+                                logger.info(f"  - Combined image size: {combined_image.size}")
+                                
+                                # Verify the image before processing
+                                if not isinstance(combined_image, Image.Image):
+                                    raise ValueError("Combined image is not a PIL Image")
+                                
+                                image = combined_image
+                            else:
+                                image_path = item.get('image_path')
+                                if image_path in preloaded_images:
+                                    image = preloaded_images[image_path]
+                                else:
+                                    image = Image.open(image_path)
+                        else:
+                            # Original processing for non-ChartQA datasets
+                            image_path = item.get('image_path')
+                            if image_path in preloaded_images:
+                                image = preloaded_images[image_path]
+                            else:
+                                image = Image.open(image_path)
+
                     # Process inputs
                     if isinstance(processor, Blip2Processor):
                         inputs = processor(
@@ -557,9 +626,6 @@ def evaluate_model(
                         ).to(device)
                         
                     elif isinstance(processor, LlavaProcessor):
-                        # Set required attributes for LLaVa
-                        processor.patch_size = 14  # Default patch size for LLaVa
-                        processor.vision_feature_select_strategy = "full"  # Use full image features
                         
                         inputs = processor(
                             images=image,
@@ -655,7 +721,7 @@ def evaluate_model(
                 metrics['short_form_accuracy'] = sum(r['score'] for r in short_form_results) / len(short_form_results)
                 metrics['short_form_count'] = float(len(short_form_results))
 
-        print(f"\nMMU Stats: {processed_count} items processed, {skipped_count} items skipped (no images)")
+            print(f"\nMMU Stats: {processed_count} items processed, {skipped_count} items skipped (no images)")
         return metrics
 
     except Exception as e:
@@ -707,3 +773,16 @@ def load_results(benchmark: str) -> Dict:
             return json.load(f)
     except Exception as e:
         raise IOError(f"Error loading results: {str(e)}") 
+
+def resize_image_aspect_ratio(img: Image.Image, target_width: int, target_height: int) -> Image.Image:
+    """Resize image to fit within target dimensions while maintaining aspect ratio."""
+    aspect_ratio = img.width / img.height
+    if aspect_ratio > target_width / target_height:
+        # Width is the limiting factor
+        new_width = target_width
+        new_height = int(target_width / aspect_ratio)
+    else:
+        # Height is the limiting factor
+        new_height = target_height
+        new_width = int(target_height * aspect_ratio)
+    return img.resize((new_width, new_height), Image.Resampling.LANCZOS) 
