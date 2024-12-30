@@ -8,7 +8,7 @@
 #SBATCH --output=slurm_logs/evolve_%A_%a.out
 #SBATCH --error=slurm_logs/evolve_%A_%a.err
 ## SBATCH --array=0-44  # 5 models × 3 benchmarks × 3 evolution types = 45 total jobs
-#SBATCH --array=0-14 # TODO: for now just run subset of jobs instead of all of them
+#SBATCH --array=0-0 # TODO: for now just run subset of jobs instead of all of them
 
 # Set cache directory to lab's netscratch location
 export EVAL_CACHE_DIR="/n/netscratch/dwork_lab/Lab/katrina/data/vlm_evolution_cache"
@@ -20,8 +20,8 @@ mkdir -p figures
 mkdir -p "$EVAL_CACHE_DIR"
 
 # Enable dataset caching and image preloading
-export USE_DATASET_CACHE="0" #"1"
-export PRELOAD_IMAGES="0" #"1"
+export USE_DATASET_CACHE="1" #"1"
+export PRELOAD_IMAGES="1" #"1"
 
 # Define arrays of models, benchmarks, and evolution types
 models=(blip2 llava minigpt4 otter molmo)

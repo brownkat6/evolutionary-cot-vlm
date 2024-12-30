@@ -343,6 +343,16 @@ def preload_images(dataset):
     if not dataset:
         return images
         
+    # Convert Dataset to list if needed
+    if isinstance(dataset, Dataset):
+        dataset = list(dataset)
+    elif not isinstance(dataset, list):
+        logger.warning(f"Unexpected dataset type: {type(dataset)}")
+        return images
+        
+    if not dataset:  # Check again after conversion
+        return images
+        
     # Get first item to determine structure
     first_item = dataset[0]
     
