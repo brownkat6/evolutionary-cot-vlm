@@ -2,7 +2,7 @@ from typing import List, Dict, Any, Optional, Tuple, Union
 import json
 import torch
 from tqdm import tqdm
-from datasets import load_dataset, Dataset, concatenate_datasets
+from datasets import load_dataset, Dataset, concatenate_datasets, Features, Value, Sequence
 from PIL import Image
 import requests
 from io import BytesIO
@@ -94,32 +94,197 @@ def download_chartqa(output_dir: Path = CHARTQA_DIR) -> None:
             zip_path.unlink()
         raise
 
-def setup_vqa_v2(output_dir: Path) -> None:
-    """Setup VQA-v2 dataset using ParlAI."""
+def setup_vqa_v2(output_dir: Path) -> Path:
+    """
+    Setup VQA-v2 dataset using direct downloads if ParlAI fails.
+    Returns the path to the dataset directory.
+    """
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n=== Setting up VQA-v2 Dataset ===")
     print(f"Target directory: {output_dir.absolute()}")
     
-    print("1. Initializing ParlAI...")
-    opt = Opt({
-        'task': 'vqa_v2',
-        'datatype': 'train:ordered',
-        'datapath': str(output_dir),
-    })
-    
-    print("2. Downloading dataset (this may take a while)...")
-    teacher = create_task_agent_from_taskname(opt)[0]
-    
-    print("3. Verifying download...")
+    # Define expected directory structure
     images_dir = output_dir / 'images'
     questions_dir = output_dir / 'questions'
-    print(f"Checking paths:")
-    print(f"  - Images: {images_dir.absolute()}")
-    print(f"  - Questions: {questions_dir.absolute()}")
-    if images_dir.exists() and questions_dir.exists():
-        print(f"✓ VQA-v2 dataset successfully set up in {output_dir}")
-    else:
-        print("! Warning: Some expected directories are missing")
+    annotations_dir = output_dir / 'annotations'
+    
+    # Check if dataset is already set up properly
+    expected_structure = {
+        'images': {
+            'train2014': images_dir / 'train2014',
+            'val2014': images_dir / 'val2014',
+            'test2015': images_dir / 'test2015'
+        },
+        'questions': {
+            'train': questions_dir / 'v2_Questions_Train_mscoco.json',
+            'val': questions_dir / 'v2_Questions_Val_mscoco.json',
+            'test': questions_dir / 'v2_Questions_Test_mscoco.json'
+        },
+        'annotations': {
+            'train': annotations_dir / 'v2_Annotations_Train_mscoco.json',
+            'val': annotations_dir / 'v2_Annotations_Val_mscoco.json'
+        }
+    }
+    
+    # Check if already properly set up
+    if all(path.exists() and (path.is_dir() and any(path.iterdir()) if 'images' in str(path) else path.is_file())
+           for group in expected_structure.values() 
+           for path in group.values()):
+        print("✓ VQA-v2 dataset already properly set up")
+        return output_dir
+    
+    # Define URLs for all splits
+    urls = {
+        # Images
+        'train_images': 'http://images.cocodataset.org/zips/train2014.zip',
+        'val_images': 'http://images.cocodataset.org/zips/val2014.zip',
+        'test_images': 'http://images.cocodataset.org/zips/test2015.zip',
+        
+        # Questions
+        'train_questions': 'https://s3.amazonaws.com/cvmlp/vqa/mscoco/vqa/v2_Questions_Train_mscoco.zip',
+        'val_questions': 'https://s3.amazonaws.com/cvmlp/vqa/mscoco/vqa/v2_Questions_Val_mscoco.zip',
+        'test_questions': 'https://s3.amazonaws.com/cvmlp/vqa/mscoco/vqa/v2_Questions_Test_mscoco.zip',
+        
+        # Annotations (not available for test set)
+        'train_annotations': 'https://s3.amazonaws.com/cvmlp/vqa/mscoco/vqa/v2_Annotations_Train_mscoco.zip',
+        'val_annotations': 'https://s3.amazonaws.com/cvmlp/vqa/mscoco/vqa/v2_Annotations_Val_mscoco.zip',
+        
+        # Additional files
+        'test_dev_questions': 'https://s3.amazonaws.com/cvmlp/vqa/mscoco/vqa/v2_Questions_Test-Dev_mscoco.zip',
+        'complementary_pairs': 'https://s3.amazonaws.com/cvmlp/vqa/mscoco/vqa/v2_Complementary_Pairs_Train_mscoco.zip'
+    }
+    
+    def download_and_extract(url: str, target_dir: Path, desc: str) -> None:
+        """Download and extract a zip file with progress bar."""
+        try:
+            zip_path = target_dir / f"temp_{Path(url).name}"
+            
+            # Download if not already exists
+            if not zip_path.exists():
+                print(f"\nDownloading {desc}...")
+                response = requests.get(url, stream=True)
+                response.raise_for_status()
+                
+                total_size = int(response.headers.get('content-length', 0))
+                with open(zip_path, 'wb') as f, tqdm(
+                    total=total_size,
+                    unit='iB',
+                    unit_scale=True,
+                    desc=f"Downloading {desc}"
+                ) as pbar:
+                    for data in response.iter_content(8192):
+                        size = f.write(data)
+                        pbar.update(size)
+            
+            # Extract
+            print(f"Extracting {desc}...")
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(target_dir)
+            
+            # Clean up
+            zip_path.unlink()
+            print(f"✓ Successfully processed {desc}")
+            
+        except Exception as e:
+            print(f"! Error processing {desc}: {str(e)}")
+            if zip_path.exists():
+                zip_path.unlink()
+            raise
+    
+    try:
+        '''
+        # First try ParlAI method
+        print("\n1. Attempting to set up using ParlAI...")
+        try:
+            opt = Opt({
+                'task': 'vqa_v2',
+                'datatype': 'train:ordered',
+                'datapath': str(output_dir),
+            })
+            teacher = create_task_agent_from_taskname(opt)[0]
+            print("✓ ParlAI setup successful")
+            return
+        except Exception as e:
+            print(f"! ParlAI setup failed: {str(e)}")
+            print("\n2. Falling back to direct downloads...")
+        '''
+        
+        # Create directory structure
+        images_dir = output_dir / 'images'
+        questions_dir = output_dir / 'questions'
+        annotations_dir = output_dir / 'annotations'
+        
+        for directory in [images_dir, questions_dir, annotations_dir]:
+            directory.mkdir(exist_ok=True)
+        
+        # Group files by type for organized downloading
+        file_groups = {
+            'Images': [k for k in urls.keys() if 'images' in k],
+            'Questions': [k for k in urls.keys() if 'questions' in k],
+            'Annotations': [k for k in urls.keys() if 'annotations' in k]
+        }
+        
+        # Download and extract all files by group
+        for group_name, file_keys in file_groups.items():
+            print(f"\nProcessing {group_name}...")
+            for key in file_keys:
+                url = urls[key]
+                target_dir = (images_dir if 'images' in key else 
+                            questions_dir if 'questions' in key else 
+                            annotations_dir)
+                download_and_extract(url, target_dir, key)
+        
+        print("\n3. Verifying download...")
+        expected_dirs = {
+            'train2014': images_dir / 'train2014',
+            'val2014': images_dir / 'val2014',
+            'test2015': images_dir / 'test2015'
+        }
+        
+        expected_files = {
+            'train_questions': questions_dir / 'v2_Questions_Train_mscoco.json',
+            'val_questions': questions_dir / 'v2_Questions_Val_mscoco.json',
+            'test_questions': questions_dir / 'v2_Questions_Test_mscoco.json',
+            'train_annotations': annotations_dir / 'v2_Annotations_Train_mscoco.json',
+            'val_annotations': annotations_dir / 'v2_Annotations_Val_mscoco.json'
+        }
+        
+        # Verify directories
+        print("\nVerifying image directories:")
+        for name, path in expected_dirs.items():
+            if path.exists() and any(path.iterdir()):
+                print(f"✓ Found {name} directory with files")
+            else:
+                print(f"! Warning: {name} directory is missing or empty")
+        
+        # Verify files
+        print("\nVerifying question and annotation files:")
+        for name, path in expected_files.items():
+            if path.exists():
+                print(f"✓ Found {name} file")
+            else:
+                print(f"! Warning: {name} file is missing")
+        
+        print(f"\n✓ VQA-v2 dataset successfully set up in {output_dir}")
+        
+    except Exception as e:
+        print(f"\n! Error during VQA-v2 setup: {str(e)}")
+        raise
+
+    # Verify final structure matches what's expected by load_benchmark_dataset
+    missing_files = []
+    for group_name, group_items in expected_structure.items():
+        for item_name, path in group_items.items():
+            if not path.exists() or (path.is_dir() and not any(path.iterdir())):
+                missing_files.append(f"{group_name}/{item_name}")
+    
+    if missing_files:
+        raise DatasetLoadError(
+            f"VQA-v2 setup incomplete. Missing: {', '.join(missing_files)}"
+        )
+    
+    return output_dir
 
 def setup_mmmu(output_dir: Path) -> Dict[str, Dataset]:
     """Setup MMMU dataset by combining all subjects."""
@@ -366,40 +531,100 @@ def save_processed_dataset(dataset: Union[Dataset, List, Dict], benchmark: str, 
     except Exception as e:
         logger.warning(f"Failed to save dataset cache: {str(e)}")
 
-def load_processed_dataset(benchmark: str, split: str, num_samples: Optional[int] = None) -> Optional[List[Dict[str, str]]]:
+def load_processed_dataset(benchmark: str, split: str, num_samples: Optional[int] = None) -> Optional[Dataset]:
     """Load processed dataset from disk cache."""
     try:
         cache_key = f"{benchmark}_{split}_{num_samples}"
         cache_path = _CACHE_DIR / f"{cache_key}.pt"
         if cache_path.exists():
             logger.info(f"Loading cached dataset from {cache_path}")
-            dataset = torch.load(cache_path)
+            data = torch.load(cache_path)
             
             # Extract dataset if it's in a dictionary
-            if isinstance(dataset, dict) and 'dataset' in dataset:
-                dataset = dataset['dataset']
+            if isinstance(data, dict) and 'dataset' in data:
+                dataset = data['dataset']
+            else:
+                dataset = data
             
-            # Convert to list of dictionaries with consistent types
-            if isinstance(dataset, Dataset):
-                return [
-                    {
-                        'question': str(item['question']),
-                        'answer': str(item['answer']),
-                        'image_path': str(item['image_path']),
-                        'split': str(item['split'])
-                    }
-                    for item in dataset
-                ]
-            elif isinstance(dataset, list):
-                return [
-                    {
-                        'question': str(item['question']),
-                        'answer': str(item['answer']),
-                        'image_path': str(item['image_path']),
-                        'split': str(item['split'])
-                    }
-                    for item in dataset
-                ]
+            # Define features based on benchmark
+            if benchmark == 'vqav2':
+                features = Features({
+                    'question': Value('string'),
+                    'answer': Value('string'),
+                    'answers': Sequence(Value('string')),
+                    'image_path': Value('string'),
+                    'split': Value('string'),
+                    'question_id': Value('string'),
+                    'image_id': Value('string'),
+                    'data_type': Value('string'),
+                    'task_type': Value('string')
+                })
+            else:
+                # Default features for other benchmarks
+                features = Features({
+                    'question': Value('string'),
+                    'answer': Value('string'),
+                    'image_path': Value('string'),
+                    'split': Value('string')
+                })
+            
+            # Convert to Dataset with appropriate features
+            if isinstance(dataset, list):
+                # Convert list items to have consistent types
+                processed_records = []
+                for item in dataset:
+                    if benchmark == 'vqav2':
+                        record = {
+                            'question': str(item.get('question', '')),
+                            'answer': str(item.get('answer', '')),
+                            'answers': [str(a) for a in item.get('answers', [])],
+                            'image_path': str(item.get('image_path', '')),
+                            'split': str(item.get('split', split)),
+                            'question_id': str(item.get('question_id', '')),
+                            'image_id': str(item.get('image_id', '')),
+                            'data_type': str(item.get('data_type', '')),
+                            'task_type': str(item.get('task_type', ''))
+                        }
+                    else:
+                        record = {
+                            'question': str(item.get('question', '')),
+                            'answer': str(item.get('answer', '')),
+                            'image_path': str(item.get('image_path', '')),
+                            'split': str(item.get('split', split))
+                        }
+                    processed_records.append(record)
+                
+                dataset = Dataset.from_list(processed_records, features=features)
+            
+            elif isinstance(dataset, Dataset):
+                # Verify and convert features if needed
+                if set(dataset.features.keys()) != set(features.keys()):
+                    # Convert Dataset to list and back to ensure correct features
+                    processed_records = []
+                    for item in dataset:
+                        if benchmark == 'vqav2':
+                            record = {
+                                'question': str(item.get('question', '')),
+                                'answer': str(item.get('answer', '')),
+                                'answers': [str(a) for a in item.get('answers', [])],
+                                'image_path': str(item.get('image_path', '')),
+                                'split': str(item.get('split', split)),
+                                'question_id': str(item.get('question_id', '')),
+                                'image_id': str(item.get('image_id', '')),
+                                'data_type': str(item.get('data_type', '')),
+                                'task_type': str(item.get('task_type', ''))
+                            }
+                        else:
+                            record = {
+                                'question': str(item.get('question', '')),
+                                'answer': str(item.get('answer', '')),
+                                'image_path': str(item.get('image_path', '')),
+                                'split': str(item.get('split', split))
+                            }
+                        processed_records.append(record)
+                    dataset = Dataset.from_list(processed_records, features=features)
+            
+            return dataset
                 
     except Exception as e:
         logger.warning(f"Failed to load dataset cache: {str(e)}")
@@ -514,50 +739,131 @@ def load_benchmark_dataset(
         # Keep as Dataset, no conversion needed since get_chartqa_dataset now returns correct format
         
     elif benchmark == 'vqav2':
-        from parlai.core.params import ParlaiParser
-        from parlai.core.teachers import create_task_agent_from_taskname
-        from parlai.core.opt import Opt
-        from constants import PARL_AI_DIR
+        # Ensure dataset is downloaded and get its path
+        dataset_dir = ensure_dataset(benchmark, data_dir)
         
-        # Create options
-        parser = ParlaiParser(True, True)
-        parser.set_defaults(task='vqa_v2', datatype=split)
-        opt = parser.parse_args(args=[], print_args=False)
+        # Define paths based on setup_vqa_v2's structure
+        images_dir = dataset_dir / 'images'
+        questions_dir = dataset_dir / 'questions'
+        annotations_dir = dataset_dir / 'annotations'
         
-        # Create the task agent using current API
+        # Map split names to file patterns
+        split_map = {
+            'train': ('train2014', 'v2_Questions_Train_mscoco.json', 'v2_Annotations_Train_mscoco.json'),
+            'validation': ('val2014', 'v2_Questions_Val_mscoco.json', 'v2_Annotations_Val_mscoco.json'),
+            'test': ('test2015', 'v2_Questions_Test_mscoco.json', None)  # No annotations for test
+        }
+        
+        if split not in split_map:
+            raise ValueError(f"Invalid split '{split}' for VQA-v2. Must be one of {list(split_map.keys())}")
+        
+        img_dir_name, question_file, annotation_file = split_map[split]
+        
+        # Load questions with proper structure handling
+        question_path = questions_dir / question_file
         try:
-            opt['datapath'] = PARL_AI_DIR
-            task_agents = create_task_agent_from_taskname(opt)
-        except Exception as e:
-            logger.error(f"Error creating VQA task agent: {str(e)}")
-            print(f"Opt args: {opt}")
-            # Fallback to manual loading if needed
-            # return load_vqa_manual(split, data_dir, num_samples)
-            
-        # Process examples
-        dataset = []
-        for task_agent in task_agents:
-            reply = task_agent.act()
-            while reply is not None:
-                # Handle answers - check both 'labels' and 'eval_labels'
-                possible_answers = reply.get('labels', reply.get('eval_labels', []))
+            with open(question_path) as f:
+                questions_data = json.load(f)
                 
-                # Create standardized record
-                record = {
-                    'question': reply['text'],
-                    'answers': possible_answers,  # Keep as list for multiple possible answers
-                    'answer': possible_answers[0] if possible_answers else "",  # First answer as default
-                    'image_path': reply['image'],
-                    'split': split
+                # Validate question file structure
+                required_keys = {'questions', 'info', 'task_type', 'data_type', 'data_subtype', 'license'}
+                if not all(key in questions_data for key in required_keys):
+                    missing_keys = required_keys - set(questions_data.keys())
+                    raise ValueError(f"Question file missing required keys: {missing_keys}")
+                
+                # Log dataset info
+                print(f"\nVQA-v2 Dataset Info:")
+                print(f"  Task Type: {questions_data['task_type']}")
+                print(f"  Data Type: {questions_data['data_type']}")
+                print(f"  Version: {questions_data['info']['version']}")
+                print(f"  Split: {split}")
+                
+                # Extract questions into a lookup dictionary
+                questions = {
+                    q['question_id']: {
+                        'question_id': q['question_id'],
+                        'image_id': q['image_id'],
+                        'question': q['question']
+                    }
+                    for q in questions_data['questions']
                 }
+                
+        except json.JSONDecodeError as e:
+            raise DatasetLoadError(f"Failed to parse questions file {question_file}: {str(e)}")
+        except KeyError as e:
+            raise DatasetLoadError(f"Malformed question data in {question_file}: {str(e)}")
+        
+        # Load annotations if available
+        answers = {}
+        if annotation_file:
+            annotation_path = annotations_dir / annotation_file
+            try:
+                with open(annotation_path) as f:
+                    annotations_data = json.load(f)
+                    for ann in annotations_data['annotations']:
+                        answers[ann['question_id']] = [a['answer'] for a in ann['answers']]
+            except Exception as e:
+                raise DatasetLoadError(f"Failed to load annotations from {annotation_file}: {str(e)}")
+        
+        # Create dataset with consistent types
+        dataset = []
+        image_dir = images_dir / img_dir_name
+        
+        for question_id, question_data in questions.items():
+            try:
+                record = {
+                    'question': str(question_data['question']),
+                    'question_id': str(question_data['question_id']),  # Convert to string for consistency
+                    'image_id': str(question_data['image_id']),  # Convert to string for consistency
+                    'image_path': str(image_dir / f"COCO_{img_dir_name}_{question_data['image_id']:012d}.jpg"),
+                    'split': str(split),
+                    'data_type': str(questions_data['data_type']),
+                    'task_type': str(questions_data['task_type'])
+                }
+                
+                # Add answers if available (not for test set)
+                if question_id in answers:
+                    record['answers'] = [str(a) for a in answers[question_id]]  # Convert all answers to strings
+                    record['answer'] = str(answers[question_id][0])  # Use first answer as primary
+                else:
+                    record['answers'] = []
+                    record['answer'] = ""  # Empty for test set
+                
                 dataset.append(record)
                 
-                reply = task_agent.act()
+            except Exception as e:
+                print(f"! Warning: Failed to process question {question_id}: {str(e)}")
+                continue
         
         # Truncate if needed
         if num_samples is not None:
             dataset = dataset[:num_samples]
-    
+        
+        print(f"\nLoaded VQA-v2 {split} split with {len(dataset)} samples")
+        if len(dataset) == 0:
+            print(f"! Warning: No samples found in {split} split")
+            print(f"  Questions file: {question_path}")
+            print(f"  Images directory: {image_dir}")
+            if annotation_file:
+                print(f"  Annotations file: {annotation_path}")
+        
+        result = {'dataset': dataset}
+        
+        # Preload images if requested
+        if preload_imgs:
+            result.update(preload_images(result))
+            print(f"Preloaded {len(result.get('images', {}))} images")
+        
+        # Cache if enabled
+        if use_cache and len(dataset) > 0:
+            try:
+                save_processed_dataset(dataset, benchmark, split, num_samples)
+                print(f"Saved processed dataset to cache")
+            except Exception as e:
+                print(f"! Warning: Failed to save to cache: {str(e)}")
+        
+        return result
+
     elif benchmark == 'mmmu':
         mmmu_split = {
             'train': 'dev',
