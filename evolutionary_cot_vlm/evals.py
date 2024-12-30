@@ -23,6 +23,9 @@ import pickle
 from functools import lru_cache
 import base64
 from transformers import LlavaProcessor, Blip2Processor
+from lmms_eval.evaluator import simple_evaluate
+from lmms_eval.tasks import TaskManager
+from models import LMMWrapper
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -958,221 +961,86 @@ def load_benchmark_dataset(
 def evaluate_model(
     model: Any,
     processor: Any,
-    dataset_dict: Dict[str, Any],
     benchmark: str,
-    prefix: str = "",
+    split: str = "validation",
+    num_samples: Optional[int] = None,
+    prefix: str = ""
 ) -> Dict[str, float]:
-    """
-    Evaluate model on a pre-loaded dataset.
-    
-    Args:
-        model: The model to evaluate
-        processor: The model's processor/tokenizer
-        dataset_dict: Dictionary containing dataset and optionally preloaded images
-        benchmark: Name of the benchmark
-        prefix: Prefix to add to questions
-        
-    Returns:
-        Evaluation metrics
-    """
+    """Evaluate model using lmms-eval framework"""
     try:
-        dataset = dataset_dict['dataset']
-        preloaded_images = dataset_dict.get('images', {})
-        
-        print(f"\n=== Starting Evaluation on {benchmark.upper()} ===")
-        print(f"Using provided dataset with {len(dataset)} samples")
-        print(f"Preloaded images: {len(preloaded_images)}")
-        
-        # Initialize metrics
-        correct = 0
-        total = 0
-        
-        # Set device
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        model.to(device)
-        model.eval()
-        
-        # Initialize counters
-        processed_count = 0
-        skipped_count = 0
-
-        results: List[Dict[str, Any]] = []
-        
-        # If using BLIP-2, set required attributes
-        if isinstance(processor, Blip2Processor):
-            processor.image_processor.is_vqa = True
-            processor.image_processor.patch_size = 14
-            processor.tokenizer.truncation_side = "left"
-        # If using LLaVa, set required attributes
-        elif isinstance(processor, LlavaProcessor):
-            # Set these attributes before any processing
-            processor.image_processor.size = {"height": 336, "width": 336}  # LLaVa's default size
-            processor.image_processor.patch_size = 14  # Set on image_processor instead
-            processor.image_processor.vision_feature_select_strategy = "full"  # Set on image_processor instead
-            processor.patch_size = 14  # Standard patch size for LLaVa
-            processor.vision_feature_select_strategy = "full"  # Use full feature strategy
-            processor.is_vqa = True  # Add VQA flag for proper processing
-            logger.info("LLaVa processor configured with:")
-            logger.info(f"  - Image size: {processor.image_processor.size}")
-            logger.info(f"  - Patch size: {processor.image_processor.patch_size}")
-            logger.info(f"  - Feature strategy: {processor.image_processor.vision_feature_select_strategy}")
-
-        with torch.no_grad():
-            for idx, item in enumerate(tqdm(dataset)):
-                try:
-                    if benchmark == 'chartqa' and isinstance(processor, LlavaProcessor) and isinstance(item.get('image_path'), list):
-                                images = []
-                                for img_path in item.get('image_path'):
-                                    if img_path in preloaded_images:
-                                        images.append(preloaded_images[img_path])
-                                    else:
-                                        images.append(Image.open(img_path))
-                                
-                                # Calculate grid dimensions (2x3 grid for 5 images)
-                                n_images = len(images)
-                                grid_size = (2, 3)  # rows x cols
-                                
-                                # Use LLaVa's expected image size for the final image
-                                final_width = 336
-                                final_height = 336
-                                
-                                # Calculate cell size to fit within final dimensions
-                                cell_width = final_width // grid_size[1]
-                                cell_height = final_height // grid_size[0]
-                                
-                                # Create new image with grid layout
-                                combined_image = Image.new('RGB', (final_width, final_height))
-                                
-                                # Paste images into grid
-                                for i, img in enumerate(images):
-                                    if i >= grid_size[0] * grid_size[1]:
-                                        break
-                                    # Resize image to fit cell while maintaining aspect ratio
-                                    img = resize_image_aspect_ratio(img, cell_width, cell_height)
-                                    row = i // grid_size[1]
-                                    col = i % grid_size[1]
-                                    # Center image in its cell
-                                    x_offset = col * cell_width + (cell_width - img.width) // 2
-                                    y_offset = row * cell_height + (cell_height - img.height) // 2
-                                    combined_image.paste(img, (x_offset, y_offset))
-                                
-                                image = combined_image
-                    else:
-                            # Original processing for non-ChartQA datasets
-                            image_path = item.get('image_path')
-                            if image_path in preloaded_images:
-                                image = preloaded_images[image_path]
-                            else:
-                                image = Image.open(image_path)
-
-                    # Process inputs
-                    if isinstance(processor, Blip2Processor):
-                        inputs = processor(
-                            images=image,
-                            text=item['question'] + prefix,
-                            return_tensors="pt"
-                        ).to(device)
-                        
-                    elif isinstance(processor, LlavaProcessor):
-                        inputs = processor(
-                            images=image,
-                            text=item['question'] + prefix,
-                            return_tensors="pt"
-                        ).to(device)
-                    else:
-                        # Default processing for other models
-                        inputs = processor(
-                            images=image,
-                            text=item['question'] + prefix,
-                            return_tensors="pt"
-                        ).to(device)
-
-                    if benchmark == 'chartqa':
-                        question = item['question'] + prefix
-                        ground_truth = str(item['answer'])
-                        is_long_form = False
-                        
-                    elif benchmark == 'vqav2':
-                        question = item['question'] + prefix
-                        ground_truth = item['answers']
-                        is_long_form = False
-                        
-                    elif benchmark == 'mmmu':
-                        if 'image' not in item:
-                            skipped_count += 1
-                            continue
-                        processed_count += 1
-                        image = item['image']  # Already a PIL Image
-                        question = item['question'] + prefix
-                        ground_truth = str(item['answer'])
-                        is_long_form = len(ground_truth.split()) > 15 or '\n' in ground_truth
-
-                    # Generate prediction
-                    outputs = model.generate(
-                        **inputs,
-                        max_new_tokens=50 if benchmark != 'mmmu' else 100,
-                        num_beams=5,
-                        early_stopping=True
-                    )
-                    
-                    predicted = processor.decode(outputs[0], skip_special_tokens=True).lower()
-                    
-                    # Print first 3 items' predictions and ground truth
-                    if idx < 3:
-                        print(f"\n=== Item {idx + 1} Debug ===")
-                        print(f"Question + Prefix: {item['question'] + prefix}")
-                        print(f"Predicted: {predicted}")
-                        print(f"Ground Truth: {ground_truth}")
-                        print("========================")
-                    
-                    # Calculate score
-                    if benchmark == 'chartqa':
-                        score = evaluate_chartqa_answer(predicted, ground_truth)
-                    elif benchmark == 'vqav2':
-                        score = evaluate_vqav2_answer(predicted, ground_truth)
-                    else:  # mmmu
-                        score = evaluate_mmmu_answer(predicted, ground_truth, is_long_form)
-                    
-                    correct += score
-                    total += 1
-                    
-                    results.append({
-                        'question': question,
-                        'ground_truth': ground_truth,
-                        'predicted': predicted,
-                        'score': float(score),
-                        'is_long_form': is_long_form if benchmark == 'mmmu' else None
-                    })
-
-                except Exception as e:
-                    logger.error(f"Error processing item: {str(e)}")
-                    continue
-
-        # Calculate metrics
-        metrics: Dict[str, float] = {
-            'accuracy': correct / total if total > 0 else 0.0,
-            'total_samples': float(total),
-            'correct_samples': float(correct)
+        # Define allowed splits for each benchmark based on YAML configs
+        allowed_splits = {
+            'chartqa': ['test'],  # From chartqa.yaml: test_split: test
+            'vqav2': ['validation', 'test'],  # From vqav2_val.yaml and vqav2_test.yaml
+            'mmmu': ['validation', 'test']  # From mmmu_val.yaml and mmmu_test.yaml
         }
         
-        # Add benchmark-specific metrics
-        if benchmark == 'mmmu':
-            long_form_results = [r for r in results if r.get('is_long_form', False)]
-            short_form_results = [r for r in results if not r.get('is_long_form', False)]
+        if benchmark not in allowed_splits:
+            raise ValueError(
+                f"Unsupported benchmark: {benchmark}. "
+                f"Supported benchmarks: {list(allowed_splits.keys())}"
+            )
             
-            if long_form_results:
-                metrics['long_form_rouge_l'] = sum(r['score'] for r in long_form_results) / len(long_form_results)
-                metrics['long_form_count'] = float(len(long_form_results))
+        if split not in allowed_splits[benchmark]:
+            raise ValueError(
+                f"Split '{split}' not available for benchmark '{benchmark}'. "
+                f"Available splits: {allowed_splits[benchmark]}"
+            )
+        
+        # Map benchmark names to lmms-eval task names based on YAML configs
+        task_map = {
+            'chartqa': 'chartqa',  # From chartqa.yaml
+            'vqav2': 'vqav2_val' if split == "validation" else "vqav2_test",  # From vqav2_val.yaml/vqav2_test.yaml
+            'mmmu': 'mmmu_val' if split == "validation" else "mmmu_test"  # From mmmu_val.yaml/mmmu_test.yaml
+        }
             
-            if short_form_results:
-                metrics['short_form_accuracy'] = sum(r['score'] for r in short_form_results) / len(short_form_results)
-                metrics['short_form_count'] = float(len(short_form_results))
-
-            print(f"\nMMU Stats: {processed_count} items processed, {skipped_count} items skipped (no images)")
+        task_name = task_map[benchmark]
+        
+        # Configure evaluation
+        import constants
+        eval_config = {
+            "model": model,
+            "tasks": [task_name],
+            "batch_size": 1,
+            "num_fewshot": 0,
+            "limit": num_samples,
+            "device": "cuda" if torch.cuda.is_available() else "cpu",
+            "use_cache": str(constants.CACHE_DIR / task_name),
+            "cache_requests": True,
+            "log_samples": True
+        }
+        
+        # Run evaluation
+        results = simple_evaluate(**eval_config)
+        task_results = results['results'][task_name]
+        
+        # Extract metrics based on benchmark and YAML metric_list configurations
+        metrics = {}
+        if benchmark == 'chartqa':
+            # From chartqa.yaml
+            metrics['relaxed_overall'] = task_results['relaxed_overall']
+            metrics['relaxed_human_split'] = task_results['relaxed_human_split']
+            metrics['relaxed_augmented_split'] = task_results['relaxed_augmented_split']
+            
+        elif benchmark == 'vqav2':
+            if split == "validation":
+                # From vqav2_val.yaml
+                metrics['exact_match'] = task_results['exact_match']
+            else:
+                # From vqav2_test.yaml
+                metrics['submission'] = task_results['submission']
+                
+        elif benchmark == 'mmmu':
+            if split == "validation":
+                # From mmmu_val.yaml
+                metrics['mmmu_acc'] = task_results['mmmu_acc']
+            else:
+                # From mmmu_test.yaml
+                metrics['submission'] = task_results['submission']
+                
         return metrics
 
     except Exception as e:
-        print(f"\n! Error during evaluation: {str(e)}")
         raise EvaluationError(f"Error during evaluation: {str(e)}")
 
 def save_results(benchmark: str, results: List[Dict], metrics: Dict[str, float]) -> None:

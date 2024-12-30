@@ -120,21 +120,7 @@ ERROR:evals:Error processing item: The input provided to the model are wrong. Th
 ERROR:evals:Error processing item: The input provided to the model are wrong. The number of image tokens is 0 while the number of image given to the model is 5. This prevents correct indexing and breaks batch generation.
 ERROR:evals:Error processing item: The input provided to the model are wrong. The number of image tokens is 0 while the number of image given to the model is 5. This prevents correct indexing and breaks batch generation.
 
+VQA BLIP2
+ERROR:evals:Error creating VQA task agent: [Errno 122] Disk quota exceeded: '/n/holylabs/LABS/dwork_lab/Lab/katrinabrown/home/conda/envs/evolve_env/lib/python3.9/site-packages/data/COCO-IMG-2014/train2014/COCO_train2014_000000252702.jpg'
 
-Running evolution for model=blip2 benchmark=vqav2 evolve_type=default
-=== Checking VQAV2 Dataset ===
-VQA-v2 directory: /n/netscratch/dwork_lab/Lab/katrina/data/vqa_v2
-! VQA-v2 dataset not found. Starting setup...
-=== Setting up VQA-v2 Dataset ===
-Target directory: /n/netscratch/dwork_lab/Lab/katrina/data/vqa_v2
-1. Initializing ParlAI...
-2. Downloading dataset (this may take a while)...
-loading: /n/netscratch/dwork_lab/Lab/katrina/data/vqa_v2/VQA-v2/v2_OpenEnded_mscoco_train2014_questions.json
-loading: /n/netscratch/dwork_lab/Lab/katrina/data/vqa_v2/VQA-v2/v2_mscoco_train2014_annotations.json
-3. Verifying download...
-Checking paths:
-  - Images: /n/netscratch/dwork_lab/Lab/katrina/data/vqa_v2/images
-  - Questions: /n/netscratch/dwork_lab/Lab/katrina/data/vqa_v2/questions
-! Warning: Some expected directories are missing
-❌ Error: Evolution process failed: cannot import name 'create_task_agent_from_taskname' from 'parlai.core.agents' (/n/holylabs/LABS/dwork_lab/Lab/katrinabrown/home/conda/envs/evolve_env/lib/python3.9/site-packages/parlai/core/agents.py)
-Finished evolution for model=blip2 benchmark=vqav2 evolve_type=default
+Running evolution for model=llava benchmark=chartqa evolve_type=default

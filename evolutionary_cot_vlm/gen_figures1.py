@@ -44,6 +44,21 @@ def load_results(results_dir: str = 'results') -> pd.DataFrame:
     try:
         data: List[Dict[str, Any]] = []
         
+        # Define primary metric for each benchmark and split
+        primary_metrics = {
+            'chartqa': {
+                'test': 'relaxed_overall'
+            },
+            'vqav2': {
+                'validation': 'exact_match',
+                'test': 'submission'
+            },
+            'mmmu': {
+                'validation': 'mmmu_acc',
+                'test': 'submission'
+            }
+        }
+        
         # Find all result files
         result_files = glob(os.path.join(results_dir, 'evolution_results_*.json'))
         
@@ -55,13 +70,35 @@ def load_results(results_dir: str = 'results') -> pd.DataFrame:
                 with open(file_path, 'r') as f:
                     result = json.load(f)
                     
-                    # Extract data
+                    # Extract benchmark and split from filename
+                    filename = os.path.basename(file_path)
+                    parts = filename.replace('.json', '').split('_')
+                    if len(parts) < 4:  # evolution_results_benchmark_split.json
+                        logger.warning(f"Unexpected filename format: {filename}")
+                        continue
+                        
+                    benchmark = parts[2]
+                    split = parts[3]
+                    
+                    # Get metric name from the results file (new)
+                    metric_name = result.get('metric_name')
+                    if not metric_name:
+                        # Fallback to primary_metrics if not found in results
+                        if benchmark not in primary_metrics or split not in primary_metrics[benchmark]:
+                            logger.warning(f"No primary metric defined for {benchmark} {split}")
+                            continue
+                        metric_name = primary_metrics[benchmark][split]
+                    
+                    # Extract data using correct metric name
                     data.append({
                         'model': result['model'],
-                        'benchmark': result['benchmark'],
+                        'benchmark': benchmark,
                         'evolve_type': result['evolve_type'],
-                        'baseline_score': result['baseline_validation_score'],
-                        'evolved_score': result['validation_score']
+                        'baseline_score': result['baseline_validation_metrics'][metric_name],
+                        'evolved_score': result['validation_metrics'][metric_name],
+                        'metric': metric_name,
+                        'generation_best_scores': result['generation_best_scores'],
+                        'seed_scores': result['seed_scores']
                     })
             except json.JSONDecodeError as e:
                 logger.error(f"Error decoding {file_path}: {str(e)}")
@@ -106,13 +143,16 @@ def create_barplot(
         if plot_data.empty:
             raise PlottingError(f"No data found for benchmark={benchmark}, evolve_type={evolve_type}")
         
+        # Get metric name from the data
+        metric_name = plot_data['metric'].iloc[0]
+        
         # Prepare data for plotting
         plot_df = pd.melt(
             plot_data,
             id_vars=['model'],
             value_vars=['baseline_score', 'evolved_score'],
             var_name='Type',
-            value_name='Score'
+            value_name=metric_name  # Use actual metric name
         )
         
         # Create figure
@@ -122,15 +162,15 @@ def create_barplot(
         sns.barplot(
             data=plot_df,
             x='model',
-            y='Score',
+            y=metric_name,  # Use actual metric name
             hue='Type',
             palette=['lightgray', 'darkblue']
         )
         
         # Customize plot
-        plt.title(f'{benchmark.upper()} - {evolve_type.capitalize()} Evolution')
+        plt.title(f'{benchmark.upper()} - {evolve_type.capitalize()} Evolution\n{metric_name}')
         plt.xlabel('Model')
-        plt.ylabel('Validation Score')
+        plt.ylabel(metric_name)  # Use actual metric name
         plt.xticks(rotation=45)
         plt.legend(title='', labels=['Baseline', 'Evolved'])
         

@@ -7,13 +7,12 @@ import os
 from pathlib import Path
 from datetime import datetime
 from models import load_model
-from evals import evaluate_model, load_benchmark_dataset
+from evals import evaluate_model, LMMWrapper
 from evolve_generations import (
     EVOLUTION_STRATEGIES,
     EvolutionParams,
     mutate_prefix
 )
-from datasets import Dataset
 
 def get_timestamp() -> str:
     """Get current timestamp for printing."""
@@ -85,36 +84,39 @@ def fitness_function(
     processor: Any,
     prefix: str,
     benchmark: str,
-    dataset_dict: Dict[str, Any],
+    split: str = "validation",
+    num_samples: Optional[int] = None
 ) -> float:
-    """
-    Evaluate a prefix using the benchmark-specific metric on train set samples.
-    
-    Args:
-        model: The model to evaluate
-        processor: The model's processor/tokenizer
-        prefix: Prefix to evaluate
-        benchmark: Name of the benchmark
-        dataset_dict: Pre-loaded dataset dictionary with images
+    """Evaluate fitness of a prefix."""
+    try:
+        # Force test split for ChartQA
+        eval_split = "test" if benchmark == "chartqa" else split
         
-    Returns:
-        Fitness score between 0 and 1
-    """
-    metrics = evaluate_model(
-        model=model,
-        processor=processor,
-        dataset_dict=dataset_dict,
-        benchmark=benchmark,
-        prefix=prefix
-    )
-    
-    if benchmark == 'mmmu':
-        if 'short_form_accuracy' in metrics and 'long_form_rouge_l' in metrics:
-            short_weight = metrics['short_form_count'] / metrics['total_samples']
-            long_weight = metrics['long_form_count'] / metrics['total_samples']
-            return (metrics['short_form_accuracy'] * short_weight + 
-                   metrics['long_form_rouge_l'] * long_weight)
-    return metrics['accuracy']
+        # Evaluate model with prefix
+        metrics = evaluate_model(
+            model=model,
+            processor=processor,
+            benchmark=benchmark,
+            split=eval_split,
+            num_samples=num_samples,
+            prefix=prefix
+        )
+        
+        # Return appropriate metric based on benchmark
+        if benchmark == 'mmmu':
+            # Use weighted average of short-form and long-form scores
+            return metrics['accuracy']
+        elif benchmark == 'chartqa':
+            return metrics['accuracy']
+        elif benchmark == 'vqav2':
+            return metrics['accuracy']
+        else:
+            raise ValueError(f"Unsupported benchmark: {benchmark}")
+            
+    except Exception as e:
+        print(f"Error in fitness calculation: {str(e)}")
+        return 0.0  # Return minimum score on error
+
 
 def main() -> None:
     """Main function for running the evolution process."""
@@ -154,71 +156,50 @@ def main() -> None:
         # Load model
         print(f"\n[{get_timestamp()}] 🤖 Loading {args.model} model...")
         model, processor = load_model(args.model)
-        print("✅ Model loaded successfully")
         
-        # Load dataset once with caching and image preloading
-        print(f"\n[{get_timestamp()}] 📥 Loading {args.benchmark} dataset...")
-        train_dataset_dict = load_benchmark_dataset(
-            benchmark=args.benchmark,
-            split='train',
-            num_samples=N_TRAIN_SAMPLES,
-            data_dir=args.data_dir,
-            use_cache=None,
-            preload_imgs=True
-        )
-        try:
-            train_dataset_dict['dataset'] = train_dataset_dict['dataset'][:N_TRAIN_SAMPLES]
-        except IndexError:
-            print(f"Warning: Couldn't limit train dataset to {N_TRAIN_SAMPLES} samples. Using all available samples.")
-            print(train_dataset_dict['dataset'])
-        print(f"✅ Loaded training dataset with {len(train_dataset_dict['dataset'])} samples")
+        # Only wrap non-Llava models (where processor is not None)
+        if processor is not None:
+            model = LMMWrapper(model, processor)
+        print("✅ Model loaded successfully")
         
         # Load seed prefixes
         print(f"\n[{get_timestamp()}] 📥 Loading seed prefixes from {args.seed_file}...")
         prefixes = load_seed_prefixes(args.seed_file)
         print(f"✅ Loaded {len(prefixes)} seed prefixes")
         
-        # Get baseline validation score using cached dataset
+        # Get baseline validation score
         print(f"\n[{get_timestamp()}] 📊 Computing baseline validation score...")
-        val_dataset_dict = load_benchmark_dataset(
-            benchmark=args.benchmark,
-            split='validation',
-            num_samples=N_VAL_SAMPLES,
-            data_dir=args.data_dir,
-            use_cache=None,
-            preload_imgs=True
-        )
-        # convert val_dataset_dict to only contain N_VAL_SAMPLES items
-        try:
-            val_dataset_dict['dataset'] = val_dataset_dict['dataset'][:N_VAL_SAMPLES]
-        except IndexError:
-            print(f"Warning: Couldn't limit validation dataset to {N_VAL_SAMPLES} samples. Using all available samples.")
-            print(val_dataset_dict['dataset'])
-        print(f"✅ Loaded validation dataset with {len(val_dataset_dict['dataset'])} samples")
+        eval_split = "test" if args.benchmark == "chartqa" else "validation"
         baseline_metrics = evaluate_model(
-            model=model,
-            processor=processor,
-            dataset_dict=val_dataset_dict,
+            model=model,  # Use wrapped model
+            processor=None,  # Processor not needed since it's in wrapper
+            split=eval_split,
             benchmark=args.benchmark,
-            prefix=""
+            prefix="",
+            num_samples=N_VAL_SAMPLES,
         )
-        baseline_validation_score = baseline_metrics['accuracy']
-        print(f"📈 Baseline validation score: {baseline_validation_score:.4f}")
         
-        # Evaluate seed prefixes
-        print(f"\n[{get_timestamp()}] 🔍 Evaluating seed prefixes...")
-        seed_scores = []
-        for i, prefix in enumerate(prefixes, 1):
-            print(f"   Evaluating seed prefix {i}/{len(prefixes)}", end='\r')
-            score = fitness_function(
-                model=model,
-                processor=processor,
-                prefix=prefix,
-                benchmark=args.benchmark,
-                dataset_dict=train_dataset_dict
-            )
-            seed_scores.append(score)
-        print(f"\n📊 Mean seed score: {np.mean(seed_scores):.4f}")
+        # Define metric names for each benchmark and split
+        metric_map = {
+            'chartqa': {
+                'test': 'relaxed_overall'
+            },
+            'vqav2': {
+                'validation': 'exact_match',
+                'test': 'submission'
+            },
+            'mmmu': {
+                'validation': 'mmmu_acc',
+                'test': 'submission'
+            }
+        }
+        
+        # Get appropriate split and metric name
+        eval_split = "test" if args.benchmark == "chartqa" else "validation"
+        metric_name = metric_map[args.benchmark][eval_split]
+        
+        baseline_validation_score = baseline_metrics[metric_name]
+        print(f"📈 Baseline {metric_name}: {baseline_validation_score:.4f}")
         
         # Evolution loop
         current_prefixes = prefixes
@@ -229,6 +210,7 @@ def main() -> None:
         print(f"\n[{get_timestamp()}] 🧬 Starting evolution process...")
         validate_evolution_params(EVOLUTION_PARAMS)
         
+        seed_scores = []
         for generation in range(N_GENERATIONS):
             print(f"\n{'='*60}")
             print(f"🔄 Generation {generation + 1}/{N_GENERATIONS}")
@@ -238,27 +220,30 @@ def main() -> None:
             print("\n📊 Evaluating current generation...")
             for i, prefix in enumerate(current_prefixes, 1):
                 print(f"   Evaluating prefix {i}/{len(current_prefixes)}", end='\r')
-                score = fitness_function(
+                metrics = evaluate_model(
                     model=model,
-                    processor=processor,
+                    processor=None,
                     prefix=prefix,
                     benchmark=args.benchmark,
-                    dataset_dict=train_dataset_dict
+                    split=eval_split,
+                    num_samples=N_TRAIN_SAMPLES
                 )
-                scores.append(score)
+                scores.append(metrics[metric_name])
+                if i == 0:
+                    seed_scores.append(metrics[metric_name])
                 
-                if score > best_score:
-                    best_score = score
+                if scores[-1] > best_score:
+                    best_score = scores[-1]
                     best_prefix = prefix
-                    print(f"\n🌟 New best score: {best_score:.4f}")
+                    print(f"\n🌟 New best {metric_name}: {best_score:.4f}")
             
             generation_best = max(scores)
             generation_best_scores.append(float(generation_best))
             
             print(f"\n📈 Generation {generation + 1} Statistics:")
-            print(f"   Best score:  {generation_best:.4f}")
-            print(f"   Mean score:  {np.mean(scores):.4f}")
-            print(f"   Std score:   {np.std(scores):.4f}")
+            print(f"   Best {metric_name}:  {generation_best:.4f}")
+            print(f"   Mean {metric_name}:  {np.mean(scores):.4f}")
+            print(f"   Std {metric_name}:   {np.std(scores):.4f}")
             
             # Evolve new generation
             print("\n🧬 Evolving new generation...")
@@ -271,38 +256,40 @@ def main() -> None:
             print("✅ New generation created")
         
         # Evaluate best prefix on validation set
-        print(f"\n[{get_timestamp()}] 🎯 Evaluating best prefix on validation set...")
+        print(f"\n[{get_timestamp()}] 🎯 Evaluating best prefix...")
         if best_prefix is None:
             raise EvolutionError("No best prefix found during evolution")
             
         print(f"\n🏆 Best prefix found: {best_prefix}")
         val_metrics = evaluate_model(
             model=model,
-            processor=processor,
-            dataset_dict=val_dataset_dict,
+            processor=None,
+            split=eval_split,
             benchmark=args.benchmark,
-            prefix=best_prefix
+            prefix=best_prefix,
+            num_samples=N_VAL_SAMPLES,
         )
         
-        final_validation_score = val_metrics['accuracy']
-        improvement = final_validation_score - baseline_validation_score
+        final_score = val_metrics[metric_name]
+        improvement = final_score - baseline_validation_score
         print(f"\n📊 Final Results:")
-        print(f"   Validation score: {final_validation_score:.4f}")
+        print(f"   {metric_name}: {final_score:.4f}")
         print(f"   Improvement: {improvement:.4f} ({improvement*100:.1f}%)")
         
-        # Save results
+        # Save results with correct metric names
         results = {
             'benchmark': args.benchmark,
             'model': args.model,
             'evolve_type': args.evolve_type,
             'best_prefix': best_prefix,
             'best_train_score': best_score,
-            'seed_mean_train_score': float(np.mean(seed_scores)),
-            'validation_score': float(val_metrics['accuracy']),
-            'baseline_validation_score': float(baseline_validation_score),
+            'seed_mean_score': float(np.mean(seed_scores)),
+            'validation_metrics': val_metrics,
+            'baseline_validation_metrics': baseline_metrics,
             'seed_scores': [float(s) for s in seed_scores],
             'generation_best_scores': generation_best_scores,
-            'evolution_params': EVOLUTION_PARAMS.__dict__
+            'evolution_params': EVOLUTION_PARAMS.__dict__,
+            'metric_name': metric_name
         }
         
         results_path = Path('results') / f'evolution_results_{args.benchmark}_{args.model}_{args.evolve_type}.json'
