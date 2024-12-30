@@ -23,6 +23,7 @@ def get_timestamp() -> str:
 N_GENERATIONS = 2
 N_TRAIN_SAMPLES = 10
 N_SEED_PREFIXES = 20  # New constant for number of seed prefixes
+N_VAL_SAMPLES = 30
 
 # Evolution parameters
 EVOLUTION_PARAMS = EvolutionParams(
@@ -177,6 +178,7 @@ def main() -> None:
         val_dataset_dict = load_benchmark_dataset(
             benchmark=args.benchmark,
             split='validation',
+            num_samples=N_VAL_SAMPLES,
             data_dir=args.data_dir,
             use_cache=True,
             preload_imgs=True

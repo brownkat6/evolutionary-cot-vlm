@@ -482,6 +482,13 @@ def load_benchmark_dataset(
     
     else:
         raise ValueError(f"Unknown benchmark: {benchmark}")
+
+    # Truncate dataset to num_samples if specified
+    # Adjust for the fact that type may be either a list or a Dataset
+    if isinstance(dataset, list):
+        dataset = dataset[:num_samples]
+    elif isinstance(dataset, Dataset):
+        dataset = dataset[:num_samples]
     
     # Cache the loaded dataset
     result = {'dataset': dataset}
