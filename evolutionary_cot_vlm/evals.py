@@ -442,7 +442,12 @@ def load_benchmark_dataset(
         # Check memory cache
         if cache_key in _DATASET_CACHE:
             logger.info(f"Using in-memory cached dataset for {cache_key}")
-            return _DATASET_CACHE[cache_key]
+            if len(_DATASET_CACHE[cache_key]["dataset"]) == 0:
+                print(f"Warning: In-memory cached dataset for {cache_key} is empty")
+                del _DATASET_CACHE[cache_key]
+            else:
+                print(f"In-memory cached dataset for {cache_key} has {len(_DATASET_CACHE[cache_key]['dataset'])} samples")
+                return _DATASET_CACHE[cache_key]
             
         # Check disk cache
         cached_dataset = load_processed_dataset(benchmark, split, num_samples)
@@ -450,8 +455,10 @@ def load_benchmark_dataset(
             result = {'dataset': cached_dataset}
             if preload_imgs:
                 result.update(preload_images(result))
-            _DATASET_CACHE[cache_key] = result
-            return result
+            if len(result['dataset']) > 0:
+                _DATASET_CACHE[cache_key] = result
+                print(f"Loaded cached dataset for {cache_key} with {len(result['dataset'])} samples")
+                return result
     
     # Load fresh dataset
     logger.info(f"Loading fresh dataset for {benchmark}")
@@ -463,15 +470,22 @@ def load_benchmark_dataset(
         
     elif benchmark == 'vqav2':
         from parlai.core.params import ParlaiParser
-        from parlai.core.agents import create_task_agent_from_taskname
+        from parlai.core.teachers import create_task_agent_from_taskname
+        from parlai.core.opt import Opt
         
-        opt = ParlaiParser().parse_args(args=[])
-        opt['task'] = 'vqa_v2'
-        opt['datatype'] = split  # ParlAI handles train/valid/test
+        # Create options
+        parser = ParlaiParser(True, True)
+        parser.set_defaults(task='vqa_v2', datatype=split)
+        opt = parser.parse_args(args=[], print_args=False)
         
-        # Create the task agent
-        task_agents = create_task_agent_from_taskname(opt)
-        
+        # Create the task agent using current API
+        try:
+            task_agents = create_task_agent_from_taskname(opt)
+        except Exception as e:
+            logger.error(f"Error creating VQA task agent: {str(e)}")
+            # Fallback to manual loading if needed
+            # return load_vqa_manual(split, data_dir, num_samples)
+            
         # Process examples
         dataset = []
         for task_agent in task_agents:
@@ -522,12 +536,15 @@ def load_benchmark_dataset(
                     processed_dataset.append(processed_item)
                 except Exception as e:
                     logger.warning(f"Failed to process image: {str(e)}")
+                    print(f"Failed to process image: {str(e)}")
                     continue
         dataset = processed_dataset
     
     else:
         raise ValueError(f"Unknown benchmark: {benchmark}")
 
+    print(f"Loaded dataset for {benchmark} with {len(dataset)} samples")
+    
     # Truncate if needed
     if num_samples is not None and isinstance(dataset, list):
         dataset = dataset[:num_samples]

@@ -1,4 +1,4 @@
-from typing import Tuple, Any, Optional
+from typing import Tuple, Any, Optional, List, Dict
 import os
 from transformers import (
     AutoProcessor, 
@@ -12,6 +12,7 @@ from transformers import (
 )
 import torch
 from evolutionary_cot_vlm.constants import CACHE_DIR
+from PIL import Image
 
 class ModelLoadError(Exception):
     """Custom exception for model loading errors."""
@@ -40,7 +41,7 @@ def load_model(model_name: str) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
             "llava": "llava-hf/llava-1.5-7b-hf",
             "minigpt4": "microsoft/minigpt4-7b",
             "otter": "luodian/otter-9b-hf",
-            "molmo": "ContextualAI/molmo-7b"
+            "molmo": "allenai/Molmo-7B-D-0924"
         }
         
         if model_name.lower() not in model_map:
@@ -75,6 +76,8 @@ def load_model(model_name: str) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
                 torch_dtype=torch.float16 if device == "cuda" else torch.float32,
                 trust_remote_code=True
             ).to(device)
+            processor.patch_size = 14  # Standard patch size for LLaVa
+            processor.vision_feature_select_strategy = "full"  # Use full feature strategy
             
         else:  # For minigpt4, otter, and molmo
             processor = AutoProcessor.from_pretrained(
