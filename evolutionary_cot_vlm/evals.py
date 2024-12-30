@@ -316,21 +316,57 @@ def load_processed_dataset(benchmark: str, split: str, num_samples: Optional[int
         cache_path = _CACHE_DIR / f"{cache_key}.pt"
         if cache_path.exists():
             logger.info(f"Loading cached dataset from {cache_path}")
-            return torch.load(cache_path)
+            dataset = torch.load(cache_path)
+            
+            # Validate dataset structure
+            if isinstance(dataset, Dataset):
+                # Convert Dataset to list of dictionaries if needed
+                dataset = [
+                    {
+                        'question': item['question'],
+                        'answer': item['answer'],
+                        'image_path': item['image_path'],
+                        'split': item['split']
+                    }
+                    for item in dataset
+                ]
+            return dataset
     except Exception as e:
         logger.warning(f"Failed to load dataset cache: {str(e)}")
     return None
 
 def preload_images(dataset):
+    """Preload images from dataset items."""
     images = {}
-    for item in dataset:
+    
+    # Skip if dataset is empty
+    if not dataset:
+        return images
+        
+    # Get first item to determine structure
+    first_item = dataset[0]
+    
+    # Handle different dataset structures
+    if isinstance(first_item, dict):
+        image_paths = [item['image_path'] for item in dataset if 'image_path' in item]
+    elif isinstance(first_item, str):
+        # If items are strings, assume they are direct image paths
+        image_paths = dataset
+    else:
+        logger.warning(f"Unexpected dataset item type: {type(first_item)}")
+        return images
+
+    # Load images
+    for path in tqdm(image_paths, desc="Loading images"):
         try:
-            # If item is directly the image path
-            image_path = item if isinstance(item, str) else item['image_path']
-            images[image_path] = Image.open(image_path).convert('RGB')
+            if isinstance(path, str):
+                images[path] = Image.open(path).convert('RGB')
+            elif isinstance(path, list):
+                # Handle multiple images per item (e.g., ChartQA)
+                for p in path:
+                    images[p] = Image.open(p).convert('RGB')
         except Exception as e:
-            path_str = item if isinstance(item, str) else item.get('image_path', 'unknown')
-            logger.warning(f"Failed to load image {path_str}: {str(e)}")
+            logger.warning(f"Failed to load image {path}: {str(e)}")
     
     return images
 

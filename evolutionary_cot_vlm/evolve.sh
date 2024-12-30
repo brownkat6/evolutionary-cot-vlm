@@ -20,8 +20,8 @@ mkdir -p figures
 mkdir -p "$EVAL_CACHE_DIR"
 
 # Enable dataset caching and image preloading
-export USE_DATASET_CACHE="1"
-export PRELOAD_IMAGES="1"
+export USE_DATASET_CACHE="0" #"1"
+export PRELOAD_IMAGES="0" #"1"
 
 # Define arrays of models, benchmarks, and evolution types
 models=(blip2 llava minigpt4 otter molmo)
