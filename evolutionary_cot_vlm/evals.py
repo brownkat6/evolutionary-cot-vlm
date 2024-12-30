@@ -292,6 +292,10 @@ def setup_mmmu(output_dir: Path) -> Dict[str, Dataset]:
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n=== Setting up MMMU Dataset in {output_dir} ===")
     
+    # Create images directory
+    images_dir = output_dir / 'images'
+    images_dir.mkdir(exist_ok=True)
+    
     # Define split mapping and file names
     splits_map = {
         'train': 'dev',
@@ -338,6 +342,9 @@ def setup_mmmu(output_dir: Path) -> Dict[str, Dataset]:
         print(f"\nLoading {target_split} split (HF split: {hf_split}):")
         split_datasets = []
         
+        split_dir = images_dir / target_split
+        split_dir.mkdir(exist_ok=True)
+        
         for subject in subjects:
             print(f"  - Downloading {subject}...")
             try:
@@ -347,8 +354,41 @@ def setup_mmmu(output_dir: Path) -> Dict[str, Dataset]:
                     split=hf_split,
                     cache_dir=str(output_dir)
                 )
-                split_datasets.append(dataset)
-                print(f"    ✓ Found {len(dataset)} examples")
+                
+                # Process each example to save images to disk
+                processed_examples = []
+                for idx, item in enumerate(dataset):
+                    try:
+                        if 'image' in item and item['image']:
+                            # Create unique filename for this image
+                            image_filename = f"{subject}_{idx}.jpg"
+                            image_path = split_dir / image_filename
+                            
+                            if not image_path.exists():  # Only save if not already exists
+                                # Decode and save image
+                                image_bytes = BytesIO(base64.b64decode(item['image']))
+                                image = Image.open(image_bytes)
+                                image.save(image_path)
+                            
+                            # Create standardized example format
+                            processed_example = {
+                                'question': item['question'],
+                                'answer': item['answer'],
+                                'image_path': str(image_path),
+                                'split': target_split,
+                                'subject': subject  # Keep subject as metadata
+                            }
+                            processed_examples.append(processed_example)
+                            
+                    except Exception as e:
+                        print(f"    ! Error processing example {idx}: {str(e)}")
+                        continue
+                
+                # Convert to Dataset
+                if processed_examples:
+                    split_datasets.append(Dataset.from_list(processed_examples))
+                    print(f"    ✓ Processed {len(processed_examples)} examples")
+                
             except Exception as e:
                 print(f"    ! Error loading {subject}: {str(e)}")
                 continue
