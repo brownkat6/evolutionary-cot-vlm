@@ -335,23 +335,34 @@ def load_processed_dataset(benchmark: str, split: str, num_samples: Optional[int
         logger.warning(f"Failed to load dataset cache: {str(e)}")
     return None
 
-def preload_images(dataset):
-    """Preload images from dataset items."""
+def preload_images(dataset_dict):
+    """
+    Preload images from dataset dictionary.
+    
+    Args:
+        dataset_dict: Dictionary containing 'dataset' key with the actual dataset
+    """
     images = {}
+    
+    # Extract dataset from dictionary if needed
+    if isinstance(dataset_dict, dict) and 'dataset' in dataset_dict:
+        dataset = dataset_dict['dataset']
+    else:
+        dataset = dataset_dict
     
     # Skip if dataset is empty
     if not dataset:
-        return images
+        return {'images': images}
         
     # Convert Dataset to list if needed
     if isinstance(dataset, Dataset):
         dataset = list(dataset)
     elif not isinstance(dataset, list):
         logger.warning(f"Unexpected dataset type: {type(dataset)}")
-        return images
+        return {'images': images}
         
     if not dataset:  # Check again after conversion
-        return images
+        return {'images': images}
         
     # Get first item to determine structure
     first_item = dataset[0]
@@ -364,7 +375,7 @@ def preload_images(dataset):
         image_paths = dataset
     else:
         logger.warning(f"Unexpected dataset item type: {type(first_item)}")
-        return images
+        return {'images': images}
 
     # Load images
     for path in tqdm(image_paths, desc="Loading images"):
@@ -378,7 +389,7 @@ def preload_images(dataset):
         except Exception as e:
             logger.warning(f"Failed to load image {path}: {str(e)}")
     
-    return images
+    return {'images': images}
 
 def load_benchmark_dataset(
     benchmark: str,
@@ -535,8 +546,10 @@ def load_benchmark_dataset(
     
     # Cache the loaded dataset
     result = {'dataset': dataset}
+    
     if preload_imgs:
-        result.update(preload_images(dataset))
+        # Now preload_images returns a dict with 'images' key
+        result.update(preload_images(result))
     
     _DATASET_CACHE[cache_key] = result
     
