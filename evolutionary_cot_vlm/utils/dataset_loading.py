@@ -150,7 +150,11 @@ def get_chartqa_dataset(split: str, method: str = "local", data_dir: Optional[st
         data_dir: Optional path to local dataset
         
     Returns:
-        Dataset object
+        Dataset object with fields:
+            - question: str (question text)
+            - answer: str (answer text)
+            - image_path: str (full path to image file)
+            - split: str (dataset split)
     """
     if split not in ['train', 'validation', 'test']:
         raise ValueError(f"Invalid split: {split}")

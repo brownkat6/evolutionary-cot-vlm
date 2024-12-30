@@ -299,9 +299,21 @@ def evaluate_mmmu_answer(predicted: str, ground_truth: str, is_long_form: bool =
     except Exception as e:
         raise MetricCalculationError(f"Error calculating MMMU metric: {str(e)}")
 
-def save_processed_dataset(dataset: Dataset, benchmark: str, split: str, num_samples: Optional[int] = None) -> None:
+def save_processed_dataset(dataset: Union[Dataset, List, Dict], benchmark: str, split: str, num_samples: Optional[int] = None) -> None:
     """Save processed dataset to disk cache."""
     try:
+        # Extract dataset if it's in a dictionary
+        if isinstance(dataset, dict) and 'dataset' in dataset:
+            dataset = dataset['dataset']
+            
+        # Convert list to Dataset if needed
+        if isinstance(dataset, list):
+            dataset = Dataset.from_list(dataset)
+        
+        # Truncate if needed
+        if num_samples is not None:
+            dataset = dataset.select(range(min(len(dataset), num_samples)))
+            
         cache_key = f"{benchmark}_{split}_{num_samples}"
         cache_path = _CACHE_DIR / f"{cache_key}.pt"
         torch.save(dataset, cache_path)
@@ -309,7 +321,7 @@ def save_processed_dataset(dataset: Dataset, benchmark: str, split: str, num_sam
     except Exception as e:
         logger.warning(f"Failed to save dataset cache: {str(e)}")
 
-def load_processed_dataset(benchmark: str, split: str, num_samples: Optional[int] = None) -> Optional[Dataset]:
+def load_processed_dataset(benchmark: str, split: str, num_samples: Optional[int] = None) -> Optional[List[Dict[str, str]]]:
     """Load processed dataset from disk cache."""
     try:
         cache_key = f"{benchmark}_{split}_{num_samples}"
@@ -318,19 +330,32 @@ def load_processed_dataset(benchmark: str, split: str, num_samples: Optional[int
             logger.info(f"Loading cached dataset from {cache_path}")
             dataset = torch.load(cache_path)
             
-            # Validate dataset structure
+            # Extract dataset if it's in a dictionary
+            if isinstance(dataset, dict) and 'dataset' in dataset:
+                dataset = dataset['dataset']
+            
+            # Convert to list of dictionaries with consistent types
             if isinstance(dataset, Dataset):
-                # Convert Dataset to list of dictionaries if needed
-                dataset = [
+                return [
                     {
-                        'question': item['question'],
-                        'answer': item['answer'],
-                        'image_path': item['image_path'],
-                        'split': item['split']
+                        'question': str(item['question']),
+                        'answer': str(item['answer']),
+                        'image_path': str(item['image_path']),
+                        'split': str(item['split'])
                     }
                     for item in dataset
                 ]
-            return dataset
+            elif isinstance(dataset, list):
+                return [
+                    {
+                        'question': str(item['question']),
+                        'answer': str(item['answer']),
+                        'image_path': str(item['image_path']),
+                        'split': str(item['split'])
+                    }
+                    for item in dataset
+                ]
+                
     except Exception as e:
         logger.warning(f"Failed to load dataset cache: {str(e)}")
     return None
@@ -402,26 +427,15 @@ def load_benchmark_dataset(
     """
     Load a benchmark dataset with caching and optional image preloading.
     
-    Args:
-        benchmark: Name of the benchmark
-        split: Dataset split
-        num_samples: Number of samples to load
-        data_dir: Data directory
-        use_cache: Override environment cache setting
-        preload_imgs: Override environment preload setting
-        
     Returns:
-        Dictionary containing dataset and optionally preloaded images
+        Dict with keys:
+            - dataset: List[Dict[str, str]]
+            - images: Optional[Dict[str, Image.Image]]
     """
     # Use environment variables if not explicitly overridden
     use_cache = _USE_CACHE if use_cache is None else use_cache
     preload_imgs = _PRELOAD_IMAGES if preload_imgs is None else preload_imgs
     
-    logger.info(f"Cache directory: {_CACHE_DIR}")
-    logger.info(f"Using cache: {use_cache}")
-    logger.info(f"Preloading images: {preload_imgs}")
-    
-    # Rest of the function remains the same, but uses these variables
     cache_key = f"{benchmark}_{split}_{num_samples}"
     
     if use_cache:
@@ -431,25 +445,21 @@ def load_benchmark_dataset(
             return _DATASET_CACHE[cache_key]
             
         # Check disk cache
-        cache_path = _CACHE_DIR / f"{cache_key}.pt"
-        if cache_path.exists():
-            try:
-                logger.info(f"Loading cached dataset from {cache_path}")
-                dataset = torch.load(cache_path)
-                result = {'dataset': dataset}
-                if preload_imgs:
-                    result.update(preload_images(dataset))
-                _DATASET_CACHE[cache_key] = result
-                return result
-            except Exception as e:
-                logger.warning(f"Failed to load cache: {str(e)}")
+        cached_dataset = load_processed_dataset(benchmark, split, num_samples)
+        if cached_dataset is not None:
+            result = {'dataset': cached_dataset}
+            if preload_imgs:
+                result.update(preload_images(result))
+            _DATASET_CACHE[cache_key] = result
+            return result
     
-    # Load dataset if not cached
+    # Load fresh dataset
     logger.info(f"Loading fresh dataset for {benchmark}")
     dataset_dir = ensure_dataset(benchmark, data_dir)
     
     if benchmark == 'chartqa':
         dataset = get_chartqa_dataset(split, "local", str(dataset_dir))
+        # Keep as Dataset, no conversion needed since get_chartqa_dataset now returns correct format
         
     elif benchmark == 'vqav2':
         split_map = {'train': 'train', 'validation': 'valid', 'test': 'test'}
@@ -537,23 +547,17 @@ def load_benchmark_dataset(
     else:
         raise ValueError(f"Unknown benchmark: {benchmark}")
 
-    # Truncate dataset to num_samples if specified
-    # Adjust for the fact that type may be either a list or a Dataset
-    if isinstance(dataset, list):
-        dataset = dataset[:num_samples]
-    elif isinstance(dataset, Dataset):
+    # Truncate if needed
+    if num_samples is not None and isinstance(dataset, list):
         dataset = dataset[:num_samples]
     
-    # Cache the loaded dataset
     result = {'dataset': dataset}
     
     if preload_imgs:
-        # Now preload_images returns a dict with 'images' key
         result.update(preload_images(result))
     
     _DATASET_CACHE[cache_key] = result
     
-    # Save to disk cache
     if use_cache:
         save_processed_dataset(dataset, benchmark, split, num_samples)
     
