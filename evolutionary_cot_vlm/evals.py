@@ -121,19 +121,56 @@ def setup_vqa_v2(output_dir: Path) -> None:
     else:
         print("! Warning: Some expected directories are missing")
 
-def setup_mmmu(output_dir: Path) -> None:
+def setup_mmmu(output_dir: Path) -> Dict[str, Dataset]:
     """Setup MMMU dataset by combining all subjects."""
+    output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"\n=== Setting up MMMU Dataset in {output_dir} ===")
     
-    # List of all MMMU subjects
-    subjects = ['Accounting', 'Agriculture', 'Architecture_and_Engineering', 'Art', 'Art_Theory', 'Basic_Medical_Science', 'Biology', 'Chemistry', 'Clinical_Medicine', 'Computer_Science', 'Design', 'Diagnostics_and_Laboratory_Medicine', 'Economics', 'Electronics', 'Energy_and_Power', 'Finance', 'Geography', 'History', 'Literature', 'Manage', 'Marketing', 'Materials', 'Math', 'Mechanical_Engineering', 'Music', 'Pharmacy', 'Physics', 'Psychology', 'Public_Health', 'Sociology']
+    # Define split mapping and file names
+    splits_map = {
+        'train': 'dev',
+        'validation': 'validation',
+        'test': 'test'
+    }
     
+    # Check if cached files exist
+    cached_files = {
+        split: output_dir / f"mmmu_{split}.pt"
+        for split in splits_map.keys()
+    }
+    
+    # If all cached files exist, load and return them
+    if all(f.exists() for f in cached_files.values()):
+        print("Found cached MMMU datasets, loading from disk...")
+        combined_datasets = {}
+        for split, file_path in cached_files.items():
+            try:
+                combined_datasets[split] = torch.load(file_path)
+                print(f"✓ Loaded {split} split: {len(combined_datasets[split])} examples")
+            except Exception as e:
+                print(f"! Error loading {split} split: {str(e)}")
+                break
+        else:  # If no break occurred (all loads successful)
+            n_examples = sum(len(dataset) for dataset in combined_datasets.values())
+            print(f"\n✓ Loaded MMMU datasets from cache with {n_examples} total examples")
+            return combined_datasets
+    
+    # If we get here, we need to download and process the datasets
     print("1. Downloading all MMMU subjects...")
+    
+    # List of all MMMU subjects
+    subjects = ['Accounting', 'Agriculture', 'Architecture_and_Engineering', 'Art', 'Art_Theory', 
+               'Basic_Medical_Science', 'Biology', 'Chemistry', 'Clinical_Medicine', 'Computer_Science', 
+               'Design', 'Diagnostics_and_Laboratory_Medicine', 'Economics', 'Electronics', 
+               'Energy_and_Power', 'Finance', 'Geography', 'History', 'Literature', 'Manage', 
+               'Marketing', 'Materials', 'Math', 'Mechanical_Engineering', 'Music', 'Pharmacy', 
+               'Physics', 'Psychology', 'Public_Health', 'Sociology']
+    
     combined_datasets = {}
     
-    for split in ['dev', 'validation', 'test']:
-        print(f"\nLoading {split} split:")
+    for target_split, hf_split in splits_map.items():
+        print(f"\nLoading {target_split} split (HF split: {hf_split}):")
         split_datasets = []
         
         for subject in subjects:
@@ -142,7 +179,7 @@ def setup_mmmu(output_dir: Path) -> None:
                 dataset = load_dataset(
                     "MMMU/MMMU",
                     subject,
-                    split=split,
+                    split=hf_split,
                     cache_dir=str(output_dir)
                 )
                 split_datasets.append(dataset)
@@ -153,8 +190,15 @@ def setup_mmmu(output_dir: Path) -> None:
         
         # Combine all subjects for this split
         if split_datasets:
-            combined_datasets[split] = concatenate_datasets(split_datasets)
-            print(f"  ✓ Combined {split} split: {len(combined_datasets[split])} total examples")
+            combined_datasets[target_split] = concatenate_datasets(split_datasets)
+            print(f"  ✓ Combined {target_split} split: {len(combined_datasets[target_split])} total examples")
+            
+            # Save this split immediately
+            try:
+                torch.save(combined_datasets[target_split], cached_files[target_split])
+                print(f"  ✓ Saved {target_split} split to {cached_files[target_split]}")
+            except Exception as e:
+                print(f"  ! Error saving {target_split} split: {str(e)}")
     
     print("\n2. Verifying combined datasets:")
     for split, dataset in combined_datasets.items():
@@ -162,6 +206,7 @@ def setup_mmmu(output_dir: Path) -> None:
     
     n_examples = sum(len(dataset) for dataset in combined_datasets.values())
     print(f"\n✓ MMMU dataset successfully set up in {output_dir} with {n_examples} examples")
+    
     return combined_datasets
 
 def ensure_dataset(benchmark: str, data_dir: Optional[str] = None) -> Path:
@@ -472,6 +517,7 @@ def load_benchmark_dataset(
         from parlai.core.params import ParlaiParser
         from parlai.core.teachers import create_task_agent_from_taskname
         from parlai.core.opt import Opt
+        from constants import PARL_AI_DIR
         
         # Create options
         parser = ParlaiParser(True, True)
@@ -480,9 +526,11 @@ def load_benchmark_dataset(
         
         # Create the task agent using current API
         try:
+            opt['datapath'] = PARL_AI_DIR
             task_agents = create_task_agent_from_taskname(opt)
         except Exception as e:
             logger.error(f"Error creating VQA task agent: {str(e)}")
+            print(f"Opt args: {opt}")
             # Fallback to manual loading if needed
             # return load_vqa_manual(split, data_dir, num_samples)
             
@@ -615,6 +663,8 @@ def evaluate_model(
             processor.image_processor.size = {"height": 336, "width": 336}  # LLaVa's default size
             processor.image_processor.patch_size = 14  # Set on image_processor instead
             processor.image_processor.vision_feature_select_strategy = "full"  # Set on image_processor instead
+            processor.patch_size = 14  # Standard patch size for LLaVa
+            processor.vision_feature_select_strategy = "full"  # Use full feature strategy
             processor.is_vqa = True  # Add VQA flag for proper processing
             logger.info("LLaVa processor configured with:")
             logger.info(f"  - Image size: {processor.image_processor.size}")
@@ -673,32 +723,31 @@ def evaluate_model(
                     if isinstance(processor, Blip2Processor):
                         inputs = processor(
                             images=image,
-                            text=prefix + item['question'],
+                            text=item['question'] + prefix,
                             return_tensors="pt"
                         ).to(device)
                         
                     elif isinstance(processor, LlavaProcessor):
-                        
                         inputs = processor(
                             images=image,
-                            text=prefix + item['question'],
+                            text=item['question'] + prefix,
                             return_tensors="pt"
                         ).to(device)
                     else:
                         # Default processing for other models
                         inputs = processor(
                             images=image,
-                            text=prefix + item['question'],
+                            text=item['question'] + prefix,
                             return_tensors="pt"
                         ).to(device)
 
                     if benchmark == 'chartqa':
-                        question = prefix + item['question']
+                        question = item['question'] + prefix
                         ground_truth = str(item['answer'])
                         is_long_form = False
                         
                     elif benchmark == 'vqav2':
-                        question = prefix + item['question']
+                        question = item['question'] + prefix
                         ground_truth = item['answers']
                         is_long_form = False
                         
@@ -708,7 +757,7 @@ def evaluate_model(
                             continue
                         processed_count += 1
                         image = item['image']  # Already a PIL Image
-                        question = prefix + item['question']
+                        question = item['question'] + prefix
                         ground_truth = str(item['answer'])
                         is_long_form = len(ground_truth.split()) > 15 or '\n' in ground_truth
 
@@ -722,10 +771,10 @@ def evaluate_model(
                     
                     predicted = processor.decode(outputs[0], skip_special_tokens=True).lower()
                     
-                    # Print first 5 items' predictions and ground truth
-                    if idx < 5:
+                    # Print first 3 items' predictions and ground truth
+                    if idx < 3:
                         print(f"\n=== Item {idx + 1} Debug ===")
-                        print(f"Question: {question}")
+                        print(f"Question + Prefix: {item['question'] + prefix}")
                         print(f"Predicted: {predicted}")
                         print(f"Ground Truth: {ground_truth}")
                         print("========================")
