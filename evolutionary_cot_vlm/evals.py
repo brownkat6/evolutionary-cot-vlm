@@ -321,21 +321,18 @@ def load_processed_dataset(benchmark: str, split: str, num_samples: Optional[int
         logger.warning(f"Failed to load dataset cache: {str(e)}")
     return None
 
-def preload_images(dataset: Dataset) -> Dict[str, Any]:
-    """Pre-load images into memory."""
-    logger.info("Pre-loading images into memory...")
+def preload_images(dataset):
     images = {}
-    for item in tqdm(dataset, desc="Loading images"):
-        if 'image_path' in item:
-            try:
-                images[item['image_path']] = Image.open(item['image_path'])
-            except Exception as e:
-                logger.warning(f"Failed to load image {item['image_path']}: {str(e)}")
+    for item in dataset:
+        try:
+            # If item is directly the image path
+            image_path = item if isinstance(item, str) else item['image_path']
+            images[image_path] = Image.open(image_path).convert('RGB')
+        except Exception as e:
+            path_str = item if isinstance(item, str) else item.get('image_path', 'unknown')
+            logger.warning(f"Failed to load image {path_str}: {str(e)}")
     
-    return {
-        'dataset': dataset,
-        'images': images
-    }
+    return images
 
 def load_benchmark_dataset(
     benchmark: str,
