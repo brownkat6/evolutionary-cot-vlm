@@ -2,9 +2,15 @@ from typing import Tuple, Any, Optional
 import torch
 from evolutionary_cot_vlm.constants import CACHE_DIR
 from lmms_eval.models.llava_hf import LlavaHf
-from lmms_eval.models.blip2_hf import Blip2Hf
-from lmms_eval.models.minigpt4_hf import MiniGPT4Hf
-from lmms_eval.models.otter_hf import OtterHf
+#from lmms_eval.models.blip2_hf import Blip2Hf
+from lmms_eval.models.instructblip import InstructBLIP
+from lmms_eval.models.batch_gpt4 import BatchGPT4
+from lmms_eval.model.claude import Claude
+#from lmms_eval.models.minigpt4_hf import MiniGPT4Hf
+#from lmms_eval.models.otter_hf import OtterHf
+# TODO: fix the gpt4, otter_hf, and molmo model loading
+
+# TODO: sign up for ANTHROPIC_API_KEY and ANTHROPIC_API_URL if using claude
 
 class ModelLoadError(Exception):
     """Custom exception for model loading errors."""
@@ -22,10 +28,13 @@ def load_model(model_name: str) -> Tuple[Any, Optional[Any]]:
     """
     try:
         model_map: dict[str, str] = {
-            "blip2": "Salesforce/blip2-opt-2.7b-coco",
+            #"blip2": "Salesforce/blip2-opt-2.7b-coco",
+            "blip2": "Salesforce/instructblip-vicuna-7b",
             "llava": "llava-hf/llava-1.5-7b-hf",
-            "minigpt4": "microsoft/minigpt4-7b",
-            "otter": "luodian/otter-9b-hf",
+            #"minigpt4": "microsoft/minigpt4-7b",
+            "minigpt4": "gpt-4o",
+            #"otter": "luodian/otter-9b-hf",
+            "claude": "claude-3-opus-20240229",
             "molmo": "allenai/Molmo-7B-D-0924"
         }
         
@@ -44,7 +53,7 @@ def load_model(model_name: str) -> Tuple[Any, Optional[Any]]:
             return model, None
             
         elif model_name.lower() == "blip2":
-            model = Blip2Hf(
+            model = InstructBLIP(
                 pretrained=model_path,
                 batch_size=1,
                 trust_remote_code=True
@@ -52,15 +61,15 @@ def load_model(model_name: str) -> Tuple[Any, Optional[Any]]:
             return model, None
             
         elif model_name.lower() == "minigpt4":
-            model = MiniGPT4Hf(
+            model = BatchGPT4(
                 pretrained=model_path,
                 batch_size=1,
                 trust_remote_code=True
             )
             return model, None
             
-        elif model_name.lower() == "otter":
-            model = OtterHf(
+        elif model_name.lower() == "claude":
+            model = Claude(
                 pretrained=model_path,
                 batch_size=1,
                 trust_remote_code=True

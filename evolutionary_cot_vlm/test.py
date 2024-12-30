@@ -16,7 +16,7 @@ python test.py --model blip2 --benchmark chartqa --split test
 def main():
     parser = argparse.ArgumentParser(description='Evaluate a multimodal model on benchmarks')
     parser.add_argument('--model', type=str, required=True, 
-                      choices=['blip2', 'llava', 'minigpt4', 'otter', 'molmo'],
+                      choices=['blip2', 'llava', 'minigpt4', 'claude', 'molmo'],
                       help='Name of the model to evaluate')
     parser.add_argument('--benchmark', type=str, required=True,
                       choices=['chartqa', 'vqav2', 'mmmu'],
