@@ -181,6 +181,7 @@ def main() -> None:
             use_cache=True,
             preload_imgs=True
         )
+        print(f"✅ Loaded validation dataset with {len(val_dataset_dict['dataset'])} samples")
         baseline_metrics = evaluate_model(
             model=model,
             processor=processor,
