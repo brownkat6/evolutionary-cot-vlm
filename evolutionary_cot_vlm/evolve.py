@@ -163,7 +163,7 @@ def main() -> None:
             split='train',
             num_samples=N_TRAIN_SAMPLES,
             data_dir=args.data_dir,
-            use_cache=True,
+            use_cache=None,
             preload_imgs=True
         )
         print(f"✅ Loaded training dataset with {len(train_dataset_dict['dataset'])} samples")
@@ -180,7 +180,7 @@ def main() -> None:
             split='validation',
             num_samples=N_VAL_SAMPLES,
             data_dir=args.data_dir,
-            use_cache=True,
+            use_cache=None,
             preload_imgs=True
         )
         print(f"✅ Loaded validation dataset with {len(val_dataset_dict['dataset'])} samples")
