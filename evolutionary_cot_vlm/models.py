@@ -35,7 +35,8 @@ def load_model(model_name: str) -> Tuple[PreTrainedModel, PreTrainedTokenizer]:
         device = "cuda" if torch.cuda.is_available() else "cpu"
         
         model_map: dict[str, str] = {
-            "blip2": "Salesforce/blip2-opt-2.7b-coco", # coco-finetuned instructed version
+            "blip2": "Salesforce/blip2-opt-2.7b", # non-instruct-finetuned version
+            #"blip2": "Salesforce/blip2-opt-2.7b-coco", # coco-finetuned instructed version
             "llava": "llava-hf/llava-1.5-7b-hf",
             "minigpt4": "microsoft/minigpt4-7b",
             "otter": "luodian/otter-9b-hf",

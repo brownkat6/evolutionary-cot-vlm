@@ -22,6 +22,7 @@ import zipfile
 import pickle
 from functools import lru_cache
 import base64
+from transformers import LlavaProcessor, Blip2Processor
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -434,12 +435,15 @@ def load_benchmark_dataset(
                 f"COCO_{coco_split}2014_{image_id:012d}.jpg"
             )
             
-            # According to ParlAI docs, answers are in 'labels' field
             dataset.append({
                 'question': reply['text'],
-                'answers': reply['labels'],  # This is correct per ParlAI docs
+                'answers': reply['labels'],
                 'image_path': image_path
             })
+            
+        # Handle num_samples for list instead of using select
+        if num_samples:
+            dataset = dataset[:num_samples]
             
     elif benchmark == 'mmmu':
         mmmu_split = {
@@ -472,9 +476,6 @@ def load_benchmark_dataset(
     
     else:
         raise ValueError(f"Unknown benchmark: {benchmark}")
-
-    if num_samples:
-        dataset = dataset.select(range(min(num_samples, len(dataset))))
     
     # Cache the loaded dataset
     result = {'dataset': dataset}
@@ -531,6 +532,12 @@ def evaluate_model(
         skipped_count = 0
 
         results: List[Dict[str, Any]] = []
+        # If using BLIP-2, set required attributes
+        if isinstance(processor, Blip2Processor):
+            processor.image_processor.is_vqa = True
+            processor.image_processor.patch_size = 14
+            processor.tokenizer.truncation_side = "left"
+
         with torch.no_grad():
             for idx, item in enumerate(tqdm(dataset)):
                 try:
@@ -541,6 +548,32 @@ def evaluate_model(
                     else:
                         image = Image.open(image_path)
                     
+                    # Process inputs
+                    if isinstance(processor, Blip2Processor):
+                        inputs = processor(
+                            images=image,
+                            text=prefix + item['question'],
+                            return_tensors="pt"
+                        ).to(device)
+                        
+                    elif isinstance(processor, LlavaProcessor):
+                        # Set required attributes for LLaVa
+                        processor.patch_size = 14  # Default patch size for LLaVa
+                        processor.vision_feature_select_strategy = "full"  # Use full image features
+                        
+                        inputs = processor(
+                            images=image,
+                            text=prefix + item['question'],
+                            return_tensors="pt"
+                        ).to(device)
+                    else:
+                        # Default processing for other models
+                        inputs = processor(
+                            images=image,
+                            text=prefix + item['question'],
+                            return_tensors="pt"
+                        ).to(device)
+
                     if benchmark == 'chartqa':
                         question = prefix + item['question']
                         ground_truth = str(item['answer'])
@@ -562,12 +595,6 @@ def evaluate_model(
                         is_long_form = len(ground_truth.split()) > 15 or '\n' in ground_truth
 
                     # Generate prediction
-                    inputs = processor(
-                        images=image,
-                        text=question,
-                        return_tensors="pt"
-                    ).to(device)
-
                     outputs = model.generate(
                         **inputs,
                         max_new_tokens=50 if benchmark != 'mmmu' else 100,
