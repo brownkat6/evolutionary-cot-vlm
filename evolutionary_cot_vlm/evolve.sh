@@ -24,7 +24,7 @@ export USE_DATASET_CACHE="1" #"1"
 export PRELOAD_IMAGES="1" #"1"
 
 # Define arrays of models, benchmarks, and evolution types
-models=(blip2 molmo llava minigpt4 otter)
+models=(blip2 molmo llava minigpt4 claude)
 benchmarks=(chartqa vqav2 mmmu)
 evolve_types=(default rank boltzmann)
 #evolve_types=(default)

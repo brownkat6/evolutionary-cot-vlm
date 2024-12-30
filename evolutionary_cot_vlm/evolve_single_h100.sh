@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=evolve_single
 #SBATCH --partition=seas_gpu
-#SBATCH --gres=gpu:nvidia_a100-sxm4-80gb:1
+#SBATCH --gres=gpu:nvidia_h100_80gb_hbm3:1
 #SBATCH --time=0-12:00
 #SBATCH --mem=128G
 #SBATCH --cpus-per-task=8
@@ -58,7 +58,7 @@ mkdir -p "$EVAL_CACHE_DIR"
 export USE_DATASET_CACHE="1"
 export PRELOAD_IMAGES="1"
 
-echo "Running evolution for model=$model benchmark=$benchmark evolve_type=$evolve_type"
+echo "Running evolution for model=$model benchmark=$benchmark evolve_type=$evolve_type on H100"
 
 # Activate conda environment (adjust as needed)
 source ~/.bashrc
