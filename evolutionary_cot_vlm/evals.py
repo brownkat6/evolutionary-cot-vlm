@@ -462,59 +462,40 @@ def load_benchmark_dataset(
         # Keep as Dataset, no conversion needed since get_chartqa_dataset now returns correct format
         
     elif benchmark == 'vqav2':
-        split_map = {'train': 'train', 'validation': 'valid', 'test': 'test'}
-        parlai_split = split_map.get(split)
-        if not parlai_split:
-            raise ValueError(f"Invalid split: {split}")
-            
-        # Map splits to COCO image directory names
-        coco_split_map = {'train': 'train', 'valid': 'val', 'test': 'test'}
-        coco_split = coco_split_map[parlai_split]
+        from parlai.core.params import ParlaiParser
+        from parlai.core.agents import create_task_agent_from_taskname
         
-        opt = Opt({
-            'task': 'vqa_v2',
-            'datatype': f'{parlai_split}:ordered',
-            'datapath': str(dataset_dir),
-        })
+        opt = ParlaiParser().parse_args(args=[])
+        opt['task'] = 'vqa_v2'
+        opt['datatype'] = split  # ParlAI handles train/valid/test
         
-        # Specifically use OeTeacher
-        teacher = OeTeacher(opt)
-        teacher.reset()  # Ensure we start from beginning
+        # Create the task agent
+        task_agents = create_task_agent_from_taskname(opt)
         
+        # Process examples
         dataset = []
-        count = 0
-        
-        # Use tqdm to show progress
-        with tqdm(desc=f"Loading VQA-v2 {split}") as pbar:
-            while True:
-                reply = teacher.act()
-                if reply is None:
-                    break
+        for task_agent in task_agents:
+            reply = task_agent.act()
+            while reply is not None:
+                # Handle answers - check both 'labels' and 'eval_labels'
+                possible_answers = reply.get('labels', reply.get('eval_labels', []))
                 
-                # The image path needs to be constructed from the image_id
-                image_id = reply['image_id']
-                # Format: COCO_[split]2014_000000000000.jpg
-                image_path = os.path.join(
-                    str(dataset_dir),
-                    'images',
-                    f"{coco_split}2014",
-                    f"COCO_{coco_split}2014_{image_id:012d}.jpg"
-                )
-                
-                dataset.append({
+                # Create standardized record
+                record = {
                     'question': reply['text'],
-                    'answers': reply['labels'],
-                    'image_path': image_path
-                })
+                    'answers': possible_answers,  # Keep as list for multiple possible answers
+                    'answer': possible_answers[0] if possible_answers else "",  # First answer as default
+                    'image_path': reply['image'],
+                    'split': split
+                }
+                dataset.append(record)
                 
-                count += 1
-                pbar.update(1)
-                
-                if num_samples and count >= num_samples:
-                    break
-            
-        print(f"Loaded {len(dataset)} examples from VQA-v2 {split} split")
+                reply = task_agent.act()
         
+        # Truncate if needed
+        if num_samples is not None:
+            dataset = dataset[:num_samples]
+    
     elif benchmark == 'mmmu':
         mmmu_split = {
             'train': 'dev',

@@ -103,3 +103,6 @@ rm chartqa.zip
 ```
 
 
+# TODO: Debug 0 samples i train/val set for MMMU
+✓ MMMU dataset successfully set up in /n/netscratch/dwork_lab/Lab/katrina/data/mmmu with 11550 examples
+✅ Loaded validation dataset with 0 samples

@@ -24,16 +24,16 @@ export USE_DATASET_CACHE="1" #"1"
 export PRELOAD_IMAGES="1" #"1"
 
 # Define arrays of models, benchmarks, and evolution types
-models=(blip2 llava minigpt4 otter molmo)
+models=(blip2 molmo llava minigpt4 otter)
 benchmarks=(chartqa vqav2 mmmu)
 evolve_types=(default rank boltzmann)
 #evolve_types=(default)
 
 # Calculate indices
-model_idx=$((SLURM_ARRAY_TASK_ID / 9))  # 9 = 3 benchmarks × 3 evolve types
+evolve_type_idx=$((SLURM_ARRAY_TASK_ID / 9))  # 9 = 3 benchmarks × 3 evolve types
 remainder=$((SLURM_ARRAY_TASK_ID % 9))
 benchmark_idx=$((remainder / 3))
-evolve_type_idx=$((remainder % 3))
+model_idx=$((remainder % 3))
 
 model=${models[$model_idx]}
 benchmark=${benchmarks[$benchmark_idx]}
