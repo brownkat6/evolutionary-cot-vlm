@@ -22,6 +22,7 @@ def get_timestamp() -> str:
 # Constants
 N_GENERATIONS = 2
 N_TRAIN_SAMPLES = 10
+N_SEED_PREFIXES = 20  # New constant for number of seed prefixes
 
 # Evolution parameters
 EVOLUTION_PARAMS = EvolutionParams(
@@ -61,7 +62,7 @@ def load_seed_prefixes(file_path: str) -> List[str]:
         file_path: Path to the JSONL file containing prefixes
         
     Returns:
-        List of prefix strings
+        List of prefix strings limited to N_SEED_PREFIXES
         
     Raises:
         PrefixLoadError: If there's an error loading the prefixes
@@ -72,6 +73,8 @@ def load_seed_prefixes(file_path: str) -> List[str]:
             for line in f:
                 prefix = json.loads(line)['prefix']
                 prefixes.append(prefix)
+                if len(prefixes) >= N_SEED_PREFIXES:  # Limit to N_SEED_PREFIXES
+                    break
         return prefixes
     except Exception as e:
         raise PrefixLoadError(f"Error loading prefixes from {file_path}: {str(e)}")
@@ -136,7 +139,8 @@ def main() -> None:
         print(f"   Model: {args.model}")
         print(f"   Benchmark: {args.benchmark}")
         print(f"   Evolution type: {args.evolve_type}")
-        print(f"   Seed file: {args.seed_file}\n")
+        print(f"   Seed file: {args.seed_file}")
+        print(f"   Using {N_SEED_PREFIXES} seed prefixes\n")
 
         # Get evolution strategy
         evolution_strategy = EVOLUTION_STRATEGIES[args.evolve_type]

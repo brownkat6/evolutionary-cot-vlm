@@ -418,33 +418,39 @@ def load_benchmark_dataset(
         teacher.reset()  # Ensure we start from beginning
         
         dataset = []
-        num_examples = num_samples if num_samples else len(teacher)
+        count = 0
         
-        for _ in tqdm(range(num_examples), desc=f"Loading VQA-v2 {split}"):
-            reply = teacher.act()
-            if reply is None:
-                break
+        # Use tqdm to show progress
+        with tqdm(desc=f"Loading VQA-v2 {split}") as pbar:
+            while True:
+                reply = teacher.act()
+                if reply is None:
+                    break
+                
+                # The image path needs to be constructed from the image_id
+                image_id = reply['image_id']
+                # Format: COCO_[split]2014_000000000000.jpg
+                image_path = os.path.join(
+                    str(dataset_dir),
+                    'images',
+                    f"{coco_split}2014",
+                    f"COCO_{coco_split}2014_{image_id:012d}.jpg"
+                )
+                
+                dataset.append({
+                    'question': reply['text'],
+                    'answers': reply['labels'],
+                    'image_path': image_path
+                })
+                
+                count += 1
+                pbar.update(1)
+                
+                if num_samples and count >= num_samples:
+                    break
             
-            # The image path needs to be constructed from the image_id
-            image_id = reply['image_id']
-            # Format: COCO_[split]2014_000000000000.jpg
-            image_path = os.path.join(
-                str(dataset_dir),
-                'images',
-                f"{coco_split}2014",
-                f"COCO_{coco_split}2014_{image_id:012d}.jpg"
-            )
-            
-            dataset.append({
-                'question': reply['text'],
-                'answers': reply['labels'],
-                'image_path': image_path
-            })
-            
-        # Handle num_samples for list instead of using select
-        if num_samples:
-            dataset = dataset[:num_samples]
-            
+        print(f"Loaded {len(dataset)} examples from VQA-v2 {split} split")
+        
     elif benchmark == 'mmmu':
         mmmu_split = {
             'train': 'dev',
@@ -553,11 +559,7 @@ def evaluate_model(
         with torch.no_grad():
             for idx, item in enumerate(tqdm(dataset)):
                 try:
-                    if benchmark == 'chartqa':
-                        # For ChartQA, handle multiple images
-                        if isinstance(processor, LlavaProcessor):
-                            # Get all images
-                            if isinstance(item.get('image_path'), list):
+                    if benchmark == 'chartqa' and isinstance(processor, LlavaProcessor) and isinstance(item.get('image_path'), list):
                                 images = []
                                 for img_path in item.get('image_path'):
                                     if img_path in preloaded_images:
@@ -593,23 +595,8 @@ def evaluate_model(
                                     y_offset = row * cell_height + (cell_height - img.height) // 2
                                     combined_image.paste(img, (x_offset, y_offset))
                                 
-                                # Add debug logging
-                                logger.info(f"Processing item {idx}:")
-                                logger.info(f"  - Number of source images: {len(images)}")
-                                logger.info(f"  - Combined image size: {combined_image.size}")
-                                
-                                # Verify the image before processing
-                                if not isinstance(combined_image, Image.Image):
-                                    raise ValueError("Combined image is not a PIL Image")
-                                
                                 image = combined_image
-                            else:
-                                image_path = item.get('image_path')
-                                if image_path in preloaded_images:
-                                    image = preloaded_images[image_path]
-                                else:
-                                    image = Image.open(image_path)
-                        else:
+                    else:
                             # Original processing for non-ChartQA datasets
                             image_path = item.get('image_path')
                             if image_path in preloaded_images:

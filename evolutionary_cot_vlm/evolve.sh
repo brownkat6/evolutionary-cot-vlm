@@ -26,7 +26,8 @@ export PRELOAD_IMAGES="1"
 # Define arrays of models, benchmarks, and evolution types
 models=(blip2 llava minigpt4 otter molmo)
 benchmarks=(chartqa vqav2 mmmu)
-evolve_types=(default rank boltzmann)
+#evolve_types=(default rank boltzmann)
+evolve_types=(default)
 
 # Calculate indices
 model_idx=$((SLURM_ARRAY_TASK_ID / 9))  # 9 = 3 benchmarks × 3 evolve types
