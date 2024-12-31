@@ -5,7 +5,7 @@ from lmms_eval.models.llava_hf import LlavaHf
 #from lmms_eval.models.blip2_hf import Blip2Hf
 from lmms_eval.models.instructblip import InstructBLIP
 from lmms_eval.models.batch_gpt4 import BatchGPT4
-from lmms_eval.model.claude import Claude
+from lmms_eval.models.claude import Claude
 #from lmms_eval.models.minigpt4_hf import MiniGPT4Hf
 #from lmms_eval.models.otter_hf import OtterHf
 # TODO: fix the gpt4, otter_hf, and molmo model loading
