@@ -25,7 +25,6 @@ import base64
 from transformers import LlavaProcessor, Blip2Processor
 from lmms_eval.evaluator import simple_evaluate
 from lmms_eval.tasks import TaskManager
-from models import LMMWrapper
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -53,6 +52,137 @@ class DatasetLoadError(Exception):
 class MetricCalculationError(Exception):
     """Custom exception for metric calculation errors."""
     pass
+
+class LMMWrapper:
+    """
+    Wrapper class to make models compatible with lmms-eval interface.
+    Currently used for Molmo model which doesn't have native lmms-eval support.
+    """
+    
+    def __init__(self, model, processor):
+        self.model = model
+        self.processor = processor
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+    def generate_until(self, inputs: Union[str, List[str]], stop_sequences: List[str]) -> List[str]:
+        """
+        Required by lmms-eval - generates text until stop sequence.
+        
+        Args:
+            inputs: String or list of strings containing the prompts
+            stop_sequences: List of strings that should stop generation when encountered
+            
+        Returns:
+            List of generated responses
+        """
+        if isinstance(inputs, str):
+            inputs = [inputs]
+            
+        try:
+            # Process inputs with image if present
+            processed = self.processor(
+                text=inputs,
+                return_tensors="pt",
+                padding=True,
+                truncation=True
+            ).to(self.device)
+            
+            # Generate
+            with torch.no_grad():
+                outputs = self.model.generate(
+                    **processed,
+                    max_length=512,
+                    do_sample=False,
+                    num_beams=1,
+                    pad_token_id=self.processor.tokenizer.pad_token_id,
+                    eos_token_id=self.processor.tokenizer.eos_token_id
+                )
+            
+            # Decode outputs
+            decoded = self.processor.batch_decode(
+                outputs, 
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=True
+            )
+            
+            # Apply stop sequences
+            for stop_seq in stop_sequences:
+                decoded = [response.split(stop_seq)[0] for response in decoded]
+                
+            return decoded
+            
+        except Exception as e:
+            print(f"Error in generate_until: {str(e)}")
+            return ["" for _ in inputs]  # Return empty strings on error
+            
+    def loglikelihood(self, inputs: Union[str, List[str]], targets: Union[str, List[str]]) -> Tuple[List[float], List[bool]]:
+        """
+        Calculate log-likelihood of targets given inputs.
+        
+        Args:
+            inputs: Context string(s) to condition on
+            targets: Target string(s) to calculate likelihood for
+            
+        Returns:
+            Tuple of (log-likelihoods, is_greedy)
+            - log-likelihoods: List of log-probs for each target
+            - is_greedy: List of bools indicating if target token was most likely
+        """
+        if isinstance(inputs, str):
+            inputs = [inputs]
+        if isinstance(targets, str):
+            targets = [targets]
+        
+        try:
+            # Process inputs
+            processed_inputs = self.processor(
+                text=inputs,
+                return_tensors="pt",
+                padding=True,
+                truncation=True
+            ).to(self.device)
+            
+            # Get logits from model
+            with torch.no_grad():
+                outputs = self.model(**processed_inputs)
+                logits = outputs.logits
+            
+            # Process targets
+            target_tokens = [
+                self.processor.tokenizer.encode(target, add_special_tokens=False)
+                for target in targets
+            ]
+            
+            log_likelihoods = []
+            is_greedy = []
+            
+            # For each input-target pair
+            for idx, target_tok in enumerate(target_tokens):
+                sequence_logits = logits[idx]
+                
+                # Get log probs for target tokens
+                log_prob = 0.0
+                all_greedy = True
+                
+                for token_idx, token in enumerate(target_tok):
+                    token_logits = sequence_logits[token_idx]
+                    probs = torch.nn.functional.softmax(token_logits, dim=-1)
+                    token_prob = probs[token].item()
+                    log_prob += np.log(token_prob)
+                    
+                    # Check if this was the most likely token
+                    max_token = torch.argmax(token_logits).item()
+                    if max_token != token:
+                        all_greedy = False
+                    
+                log_likelihoods.append(float(log_prob))
+                is_greedy.append(all_greedy)
+                
+            return log_likelihoods, is_greedy
+            
+        except Exception as e:
+            print(f"Error in loglikelihood calculation: {str(e)}")
+            return [float('-inf')] * len(inputs), [False] * len(inputs)
 
 def download_chartqa(output_dir: Path = CHARTQA_DIR) -> None:
     """
@@ -995,7 +1125,7 @@ def evaluate_model(
         }
             
         task_name = task_map[benchmark]
-        
+            
         # Configure evaluation
         import constants
         eval_config = {
