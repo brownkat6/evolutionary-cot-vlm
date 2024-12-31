@@ -10,7 +10,11 @@ from lmms_eval.model.claude import Claude
 #from lmms_eval.models.otter_hf import OtterHf
 # TODO: fix the gpt4, otter_hf, and molmo model loading
 
-# TODO: sign up for ANTHROPIC_API_KEY and ANTHROPIC_API_URL if using claude
+# NOTE: required environment variables:
+# ANTHROPIC_API_KEY
+# OPENAI_API_URL
+
+# TODO: fix lmms-eval's batch_gpt4 model loading to import List etc. 
 
 class ModelLoadError(Exception):
     """Custom exception for model loading errors."""
