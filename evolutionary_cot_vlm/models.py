@@ -52,7 +52,8 @@ def load_model(model_name: str) -> Tuple[Any, Optional[Any]]:
             model = LlavaHf(
                 pretrained=model_path,
                 batch_size=1,
-                trust_remote_code=True
+                trust_remote_code=True,
+                device_map="auto",
             )
             return model, None
             
@@ -60,7 +61,8 @@ def load_model(model_name: str) -> Tuple[Any, Optional[Any]]:
             model = InstructBLIP(
                 pretrained=model_path,
                 batch_size=1,
-                trust_remote_code=True
+                trust_remote_code=True,
+                device_map="auto",
             )
             return model, None
             
@@ -68,7 +70,8 @@ def load_model(model_name: str) -> Tuple[Any, Optional[Any]]:
             model = BatchGPT4(
                 pretrained=model_path,
                 batch_size=1,
-                trust_remote_code=True
+                trust_remote_code=True,
+                device_map="auto",
             )
             return model, None
             
@@ -76,26 +79,30 @@ def load_model(model_name: str) -> Tuple[Any, Optional[Any]]:
             model = Claude(
                 pretrained=model_path,
                 batch_size=1,
-                trust_remote_code=True
+                trust_remote_code=True,
+                device_map="auto",
             )
             return model, None
             
         else:  # Fallback for Molmo using custom wrapper
+            print(f"Loading {model_name} from {model_path} with LMMWrapper")
             device = "cuda" if torch.cuda.is_available() else "cpu"
             from transformers import AutoProcessor, AutoModelForCausalLM
             
             processor = AutoProcessor.from_pretrained(
                 model_path,
                 cache_dir=CACHE_DIR,
-                trust_remote_code=True
+                trust_remote_code=True,
+                device_map="auto",
             )
             model = AutoModelForCausalLM.from_pretrained(
                 model_path,
                 cache_dir=CACHE_DIR,
                 torch_dtype=torch.float16 if device == "cuda" else torch.float32,
-                trust_remote_code=True
+                trust_remote_code=True,
+                device_map="auto",
             ).to(device)
             return model, processor
         
     except Exception as e:
-        raise ModelLoadError(f"Error loading {model_name}: {str(e)}") 
+        raise ModelLoadError(f"Error loading {model_name} from {model_path}: {str(e)}") 
