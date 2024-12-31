@@ -61,8 +61,8 @@ export PRELOAD_IMAGES="1"
 echo "Running evolution for model=$model benchmark=$benchmark evolve_type=$evolve_type"
 
 # Initialize mamba
-eval "$(conda shell.bash hook)"
-mamba activate evolve_env
+source ~/.bashrc
+conda activate evolve_env
 
 # Run the evolution script
 /n/holylabs/LABS/dwork_lab/Lab/katrinabrown/home/conda/envs/evolve_env/bin/python evolve.py \
