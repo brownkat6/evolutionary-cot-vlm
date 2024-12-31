@@ -64,6 +64,9 @@ echo "Running evolution for model=$model benchmark=$benchmark evolve_type=$evolv
 source ~/.bashrc
 conda activate evolve_env
 
+# echo the python command you are about to run
+echo "Running command: /n/holylabs/LABS/dwork_lab/Lab/katrinabrown/home/conda/envs/evolve_env/bin/python evolve.py --model $model --benchmark $benchmark --seed_file seed_prefixes.jsonl --evolve_type $evolve_type"
+
 # Run the evolution script
 /n/holylabs/LABS/dwork_lab/Lab/katrinabrown/home/conda/envs/evolve_env/bin/python evolve.py \
     --model $model \
