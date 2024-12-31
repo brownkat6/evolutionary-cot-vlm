@@ -46,7 +46,7 @@ source ~/.bashrc
 conda activate evolve_env
 
 # Run the evolution script
-python evolve.py \
+/n/holylabs/LABS/dwork_lab/Lab/katrinabrown/home/conda/envs/evolve_env/bin/python evolve.py \
     --model $model \
     --benchmark $benchmark \
     --seed_file seed_prefixes.jsonl \
