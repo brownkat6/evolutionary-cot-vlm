@@ -13,6 +13,7 @@ from evolve_generations import (
     EvolutionParams,
     mutate_prefix
 )
+from promptbreeder import run_promptbreeder
 
 def get_timestamp() -> str:
     """Get current timestamp for printing."""
@@ -209,7 +210,25 @@ def main() -> None:
         
         print(f"\n[{get_timestamp()}] 🧬 Starting evolution process...")
         validate_evolution_params(EVOLUTION_PARAMS)
+
+        fitness_function = lambda prompts: [evaluate_model(
+                    model=model,
+                    processor=None,
+                    prefix=suffix,
+                    benchmark=args.benchmark,
+                    split=eval_split,
+                    num_samples=N_TRAIN_SAMPLES
+                )[metric_name] for suffix in prompts]
         
+        best_prefix = run_promptbreeder(
+            fitness_function=fitness_function,
+            population_size=EVOLUTION_PARAMS.population_size,
+            num_generations=2,
+            domain_description="Solve the visual question answering problem, giving your answer as single word.",
+            hyper_mutation_prompt="Please summarize and improve the following instruction:",
+            thinking_style="Let’s think step by step."
+        )
+        '''
         seed_scores = []
         for generation in range(N_GENERATIONS):
             print(f"\n{'='*60}")
@@ -259,6 +278,8 @@ def main() -> None:
         print(f"\n[{get_timestamp()}] 🎯 Evaluating best prefix...")
         if best_prefix is None:
             raise EvolutionError("No best prefix found during evolution")
+        '''
+                                 
             
         print(f"\n🏆 Best prefix found: {best_prefix}")
         val_metrics = evaluate_model(
@@ -283,10 +304,10 @@ def main() -> None:
             'evolve_type': args.evolve_type,
             'best_prefix': best_prefix,
             'best_train_score': best_score,
-            'seed_mean_score': float(np.mean(seed_scores)),
+            #'seed_mean_score': float(np.mean(seed_scores)),
             'validation_metrics': val_metrics,
             'baseline_validation_metrics': baseline_metrics,
-            'seed_scores': [float(s) for s in seed_scores],
+            #'seed_scores': [float(s) for s in seed_scores],
             'generation_best_scores': generation_best_scores,
             'evolution_params': EVOLUTION_PARAMS.__dict__,
             'metric_name': metric_name,
