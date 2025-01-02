@@ -23,7 +23,7 @@ benchmark=$2
 evolve_type=$3
 
 # Validate inputs
-valid_models=(blip2 molmo llava minigpt4 claude)
+valid_models=(blip2 molmo llava minigpt4 claude fuyu mantis)
 valid_benchmarks=(chartqa vqav2 mmmu)
 valid_evolve_types=(default rank boltzmann)
 

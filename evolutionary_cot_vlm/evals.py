@@ -17,14 +17,37 @@ import parlai.core.build_data as build_data
 from parlai.core.opt import Opt
 from parlai.core.teachers import create_task_agent_from_taskname
 from parlai.tasks.vqa_v2.agents import OeTeacher
-from constants import CHARTQA_DIR, VQA_V2_DIR, MMMU_DIR
+from constants import CHARTQA_DIR, VQA_V2_DIR, MMMU_DIR, CACHE_DIR
 import zipfile
 import pickle
 from functools import lru_cache
 import base64
 from transformers import LlavaProcessor, Blip2Processor
-from lmms_eval.evaluator import simple_evaluate
-from lmms_eval.tasks import TaskManager
+from lmms_eval.evaluator import evaluate
+#from lmms_eval.evaluator import simple_evaluate, evaluate
+from lmms_eval.tasks import TaskManager, get_task_dict
+import lmms_eval
+from models import simple_evaluate
+import constants
+from lmms_eval.api.model import lmms
+
+import copy
+import warnings
+from typing import List, Optional, Tuple, Union
+
+import torch
+import transformers
+from accelerate import Accelerator, DistributedType
+from accelerate.state import AcceleratorState
+from tqdm import tqdm
+from transformers import InstructBlipForConditionalGeneration, InstructBlipProcessor
+
+from lmms_eval import utils
+from lmms_eval.api.instance import Instance
+from lmms_eval.api.model import lmms
+from lmms_eval.api.registry import register_model
+from lmms_eval.tasks.mmmu.utils_group_img import process_images
+from lmms_eval.utils import stop_sequences_criteria
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -53,136 +76,121 @@ class MetricCalculationError(Exception):
     """Custom exception for metric calculation errors."""
     pass
 
-class LMMWrapper:
+class LMMWrapper(lmms):
     """
     Wrapper class to make models compatible with lmms-eval interface.
     Currently used for Molmo model which doesn't have native lmms-eval support.
     """
     
     def __init__(self, model, processor):
+        super().__init__()
         self.model = model
         self.processor = processor
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        
-    def generate_until(self, inputs: Union[str, List[str]], stop_sequences: List[str]) -> List[str]:
-        """
-        Required by lmms-eval - generates text until stop sequence.
-        
-        Args:
-            inputs: String or list of strings containing the prompts
-            stop_sequences: List of strings that should stop generation when encountered
-            
-        Returns:
-            List of generated responses
-        """
-        if isinstance(inputs, str):
-            inputs = [inputs]
-            
-        try:
-            # Process inputs with image if present
-            processed = self.processor(
-                text=inputs,
-                return_tensors="pt",
-                padding=True,
-                truncation=True
-            ).to(self.device)
-            
-            # Generate
-            with torch.no_grad():
-                outputs = self.model.generate(
-                    **processed,
-                    max_length=512,
-                    do_sample=False,
-                    num_beams=1,
-                    pad_token_id=self.processor.tokenizer.pad_token_id,
-                    eos_token_id=self.processor.tokenizer.eos_token_id
+        self.task_dict = {}
+        self.rank = 0
+        self.world_size = 1
+        self.cache_requests = False
+        self.rewrite_requests_cache = False
+        self.apply_chat_template = False
+        self.fewshot_as_multiturn = False
+
+    def tok_encode(self, string: str, left_truncate_len=None, add_special_tokens=None) -> List[int]:
+        """ """
+        add_special_tokens = False if add_special_tokens is None else add_special_tokens
+        encoding = self.tokenizer.encode(string, add_special_tokens=add_special_tokens)
+        # left-truncate the encoded context to be at most `left_truncate_len` tokens long
+        if left_truncate_len:
+            encoding = encoding[-left_truncate_len:]
+        return encoding
+    
+    def generate_until(self, requests: List[Instance]) -> List[str]:
+        res = []
+
+        def _collate(x):
+            # the negative sign on len(toks) sorts descending - this has a few advantages:
+            # - time estimates will always be over not underestimates, which is more useful for planning
+            # - to know the size of a batch when going through the list, you know the first one is always the batch
+            #   padded context length. this is useful to simplify the batching logic and more importantly to make
+            #   automatic adaptive batches much much easier to implement
+            # - any OOMs will happen right away rather than near the end
+            toks = self.tok_encode(x[0])
+            return -len(toks), x[0]
+
+        # we group requests by their generation_kwargs,
+        # so that we don't try to execute e.g. greedy sampling and temp=0.8 sampling
+        # in the same batch.
+        re_ords = utils.Collator([reg.args for reg in requests], _collate, grouping=True)
+        chunks = re_ords.get_batched(n=self.batch_size, batch_fn=None)
+        num_iters = len(requests) // self.batch_size if len(requests) % self.batch_size == 0 else len(requests) // self.batch_size + 1
+        pbar = tqdm(total=num_iters, disable=(self.rank != 0), desc="Model Responding")
+        for chunk in chunks:
+            contexts, all_gen_kwargs, doc_to_visual, doc_id, task, split = zip(*chunk)
+            task = task[0]
+            split = split[0]
+            visuals = [doc_to_visual[0](self.task_dict[task][split][ids]) for ids in doc_id]
+            visuals = self.flatten(visuals)
+            # we assume all gen kwargs in the batch are the same
+            # this is safe to assume because the `grouper` object ensures it.
+            gen_kwargs = all_gen_kwargs[0]
+
+            # Set default values for until and max_new_tokens
+            until = [self.tok_decode(self.eot_token_id)]
+
+            # Update values from gen_kwargs if present
+            if "until" in gen_kwargs:
+                until = gen_kwargs.pop("until")
+                if isinstance(until, str):
+                    until = [until]
+                elif not isinstance(until, list):
+                    raise ValueError(f"Expected `gen_kwargs['until']` to be of type Union[str,list] but got {type(until)}")
+            assert self.batch_size_per_gpu == 1, "Do not support batch_size_per_gpu > 1 for now"
+            context = contexts[0]
+            if "<image>" in context:
+                # instruct blip does not expect the <image> tag
+                context = context.replace("<image>", "")
+            # Set trunction equals true here, the max length for qformer tokenizer is 512
+            # if not truncate, some questions will cause size mismatch
+            # The transformer implementation can't handle multi images for blip
+            # Concat it into one image
+            if len(visuals) > 1:
+                visuals = [process_images(visuals)]
+            inputs = self._image_processor(images=visuals, text=context, return_tensors="pt", truncation=True).to(self.device)
+
+            gen_kwargs["image_sizes"] = [visuals[idx].size for idx in range(len(visuals))]
+            if "max_new_tokens" not in gen_kwargs:
+                gen_kwargs["max_new_tokens"] = 1024
+            if "temperature" not in gen_kwargs:
+                gen_kwargs["temperature"] = 0
+            if "top_p" not in gen_kwargs:
+                gen_kwargs["top_p"] = None
+            if "num_beams" not in gen_kwargs:
+                gen_kwargs["num_beams"] = 1
+            try:
+                cont = self.model.generate(
+                    **inputs,
+                    do_sample=True if gen_kwargs["temperature"] > 0 else False,
+                    temperature=gen_kwargs["temperature"],
+                    top_p=gen_kwargs["top_p"],
+                    num_beams=gen_kwargs["num_beams"],
+                    max_new_tokens=gen_kwargs["max_new_tokens"],
                 )
+            except Exception as e:
+                eval_logger.error(f"Error {e} in generating")
+                cont = ""
+            text_outputs = self.tokenizer.batch_decode(cont, skip_special_tokens=True)[0].strip()
+            res.append(text_outputs)
+            self.cache_hook.add_partial("generate_until", (context, gen_kwargs), text_outputs)
+            pbar.update(1)
+            # reorder this group of results back to original unsorted form
+        res = re_ords.get_original(res)
+
+        pbar.close()
+        return res
             
-            # Decode outputs
-            decoded = self.processor.batch_decode(
-                outputs, 
-                skip_special_tokens=True,
-                clean_up_tokenization_spaces=True
-            )
-            
-            # Apply stop sequences
-            for stop_seq in stop_sequences:
-                decoded = [response.split(stop_seq)[0] for response in decoded]
-                
-            return decoded
-            
-        except Exception as e:
-            print(f"Error in generate_until: {str(e)}")
-            return ["" for _ in inputs]  # Return empty strings on error
-            
-    def loglikelihood(self, inputs: Union[str, List[str]], targets: Union[str, List[str]]) -> Tuple[List[float], List[bool]]:
-        """
-        Calculate log-likelihood of targets given inputs.
-        
-        Args:
-            inputs: Context string(s) to condition on
-            targets: Target string(s) to calculate likelihood for
-            
-        Returns:
-            Tuple of (log-likelihoods, is_greedy)
-            - log-likelihoods: List of log-probs for each target
-            - is_greedy: List of bools indicating if target token was most likely
-        """
-        if isinstance(inputs, str):
-            inputs = [inputs]
-        if isinstance(targets, str):
-            targets = [targets]
-        
-        try:
-            # Process inputs
-            processed_inputs = self.processor(
-                text=inputs,
-                return_tensors="pt",
-                padding=True,
-                truncation=True
-            ).to(self.device)
-            
-            # Get logits from model
-            with torch.no_grad():
-                outputs = self.model(**processed_inputs)
-                logits = outputs.logits
-            
-            # Process targets
-            target_tokens = [
-                self.processor.tokenizer.encode(target, add_special_tokens=False)
-                for target in targets
-            ]
-            
-            log_likelihoods = []
-            is_greedy = []
-            
-            # For each input-target pair
-            for idx, target_tok in enumerate(target_tokens):
-                sequence_logits = logits[idx]
-                
-                # Get log probs for target tokens
-                log_prob = 0.0
-                all_greedy = True
-                
-                for token_idx, token in enumerate(target_tok):
-                    token_logits = sequence_logits[token_idx]
-                    probs = torch.nn.functional.softmax(token_logits, dim=-1)
-                    token_prob = probs[token].item()
-                    log_prob += np.log(token_prob)
-                    
-                    # Check if this was the most likely token
-                    max_token = torch.argmax(token_logits).item()
-                    if max_token != token:
-                        all_greedy = False
-                    
-                log_likelihoods.append(float(log_prob))
-                is_greedy.append(all_greedy)
-                
-            return log_likelihoods, is_greedy
-            
-        except Exception as e:
-            print(f"Error in loglikelihood calculation: {str(e)}")
-            return [float('-inf')] * len(inputs), [False] * len(inputs)
+    def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
+        # TODO
+        assert False, "We have not implemented this function for Molmo yet"
 
 def download_chartqa(output_dir: Path = CHARTQA_DIR) -> None:
     """
@@ -859,6 +867,30 @@ def preload_images(dataset_dict):
     
     return {'images': images}
 
+from jinja2 import Template
+
+def get_chat_template(suffix=""):
+    # NOTE: for now, use the VICUNA_CHAT_TEMPLATE used by llava_hf
+    # TODO: Eventually will want to ensure this works for other models
+    template = """{% for message in messages %}
+    {% if loop.index0 == 0 %}
+    A chat between a curious user and an artificial intelligence assistant. The assistant gives helpful, detailed, and polite answers to the user's questions.
+    USER: {{ message['content'] }}
+    {% elif message['role'] == 'user' %}
+    USER: {{ message['content'] }}
+    {% else %}
+    ASSISTANT: {{ message['content'] }}{{ eos_token }}
+    {% endif %}
+    {% endfor %}
+    {% if add_generation_prompt %}
+    ASSISTANT: {{ suffix }}
+    {% endif %}
+    """
+    suffix = suffix.replace("'","\\'")
+    template = template.replace("{{ suffix }}", suffix)
+    return template
+
+
 def load_benchmark_dataset(
     benchmark: str,
     split: str = "validation",
@@ -1125,9 +1157,37 @@ def evaluate_model(
         }
             
         task_name = task_map[benchmark]
-            
-        # Configure evaluation
-        import constants
+        task_dict = get_task_dict([task_name])
+        #print(f"Task dict is {task_dict}")
+
+        # Initialize task manager to load tasks
+        task_manager = lmms_eval.tasks.TaskManager()
+       
+        # Configure task parameters
+        task_config = {
+           "num_fewshot": 0,  # Can be parameterized if needed
+           "num_samples": num_samples,
+           "split": split,
+           #"prefix": prefix
+        }
+        # Get task dict with configuration
+        task_dict = lmms_eval.tasks.get_task_dict(
+           [task_name],
+           task_manager,
+        )
+        #print(f"Task dict is {task_dict}")
+        #task_dict[task_name].suffix = prefix
+        try:
+            model.chat_template = get_chat_template(prefix)
+        except Exception as e:
+            print(e)
+        try:
+            model.suffix = prefix
+        except Exception as e:
+            print(e)
+        print(f"prefix: {prefix}")
+        #print(f"Model chat_template: {model.chat_template}")
+
         eval_config = {
             "model": model,
             "tasks": [task_name],
@@ -1135,38 +1195,65 @@ def evaluate_model(
             "num_fewshot": 0,
             "limit": num_samples,
             "device": "cuda" if torch.cuda.is_available() else "cpu",
-            "use_cache": str(constants.CACHE_DIR / task_name),
+            #"use_cache": f"{CACHE_DIR}/{task_name}",
+            #"cache_requests": True,
+            "log_samples": True,
+        }
+        #print(f"Eval config is {eval_config}")
+        
+        # Run evaluation
+        try:
+            model_attr = model._model
+        except Exception as e:
+            print(e)
+        results = simple_evaluate(**eval_config)
+        try:
+            model._model = model_attr
+        except Exception as e:
+            print(e)
+            
+        # Configure evaluation
+        '''
+        eval_config = {
+            "lm": model,
+            "task_dict": task_dict,
+            "limit": num_samples,
+            #"use_cache": f"{CACHE_DIR}/{task_name}",
             "cache_requests": True,
             "log_samples": True
         }
+        print(f"eval_config: {eval_config}")
         
         # Run evaluation
-        results = simple_evaluate(**eval_config)
+        results = evaluate(**eval_config)
+        '''
+        #print(results)
         task_results = results['results'][task_name]
+        print(task_results)
         
         # Extract metrics based on benchmark and YAML metric_list configurations
         metrics = {}
         if benchmark == 'chartqa':
             # From chartqa.yaml
-            metrics['relaxed_overall'] = task_results['relaxed_overall']
-            metrics['relaxed_human_split'] = task_results['relaxed_human_split']
-            metrics['relaxed_augmented_split'] = task_results['relaxed_augmented_split']
+            metrics['relaxed_overall'] = task_results['relaxed_overall,none']
+            metrics['relaxed_human_split'] = task_results['relaxed_human_split,none']
+            #metrics['relaxed_augmented_split'] = task_results['relaxed_augmented_split,none']
             
         elif benchmark == 'vqav2':
             if split == "validation":
                 # From vqav2_val.yaml
-                metrics['exact_match'] = task_results['exact_match']
+                metrics['exact_match'] = task_results['exact_match,none']
             else:
                 # From vqav2_test.yaml
-                metrics['submission'] = task_results['submission']
+                metrics['submission'] = task_results['submission,none']
                 
         elif benchmark == 'mmmu':
             if split == "validation":
                 # From mmmu_val.yaml
-                metrics['mmmu_acc'] = task_results['mmmu_acc']
+                metrics['mmmu_acc'] = task_results['mmmu_acc,none']
             else:
                 # From mmmu_test.yaml
-                metrics['submission'] = task_results['submission']
+                metrics['submission'] = task_results['submission,none']
                 
         return metrics
 

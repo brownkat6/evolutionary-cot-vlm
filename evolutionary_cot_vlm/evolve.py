@@ -21,8 +21,8 @@ def get_timestamp() -> str:
 # Constants
 N_GENERATIONS = 2
 N_TRAIN_SAMPLES = 10
-N_SEED_PREFIXES = 20  # New constant for number of seed prefixes
-N_VAL_SAMPLES = 30
+N_SEED_PREFIXES = 5  # New constant for number of seed prefixes
+N_VAL_SAMPLES = 30# 3000# 30#None
 
 # Evolution parameters
 EVOLUTION_PARAMS = EvolutionParams(
@@ -126,7 +126,7 @@ def main() -> None:
         # Parse arguments
         parser = argparse.ArgumentParser()
         parser.add_argument('--model', type=str, required=True,
-                          choices=['blip2', 'llava', 'minigpt4', 'otter', 'molmo'])
+                          choices=['blip2', 'llava', 'minigpt4', 'otter', 'molmo', 'fuyu', 'mantis'])
         parser.add_argument('--benchmark', type=str, required=True,
                           choices=['chartqa', 'vqav2', 'mmmu'])
         parser.add_argument('--seed_file', type=str, required=True,
@@ -289,7 +289,9 @@ def main() -> None:
             'seed_scores': [float(s) for s in seed_scores],
             'generation_best_scores': generation_best_scores,
             'evolution_params': EVOLUTION_PARAMS.__dict__,
-            'metric_name': metric_name
+            'metric_name': metric_name,
+            'n_val_samples': N_VAL_SAMPLES,
+            'n_train_samples': N_TRAIN_SAMPLES,
         }
         
         results_path = Path('results') / f'evolution_results_{args.benchmark}_{args.model}_{args.evolve_type}.json'

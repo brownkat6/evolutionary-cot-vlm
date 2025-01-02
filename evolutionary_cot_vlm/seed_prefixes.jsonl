@@ -1,8 +1,8 @@
-{"prefix": "Let's think about this step by step:"}
-{"prefix": "Let's solve this systematically:"}
-{"prefix": "Let's break this down into steps:"}
-{"prefix": "Let me analyze this methodically:"}
-{"prefix": "Here's my step-by-step reasoning:"}
+{"prefix": "Let's think about this step by step: "}
+{"prefix": "Let's solve this systematically: "}
+{"prefix": "Let's break this down into steps: "}
+{"prefix": "Let me analyze this methodically, and then answer the question with a single word once I've finished thinking. "}
+{"prefix": "Answer: "}
 {"prefix": "Let's approach this logically:"}
 {"prefix": "Breaking this down systematically:"}
 {"prefix": "Following a step-by-step approach:"}
